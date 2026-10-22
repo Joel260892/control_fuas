@@ -2674,11 +2674,18 @@ else:
                             conn.autocommit = True
                             cursor = conn.cursor()
                             
-                            # 4. Leer y ejecutar el archivo SQL línea por línea / bloque por bloque
+                            # 4. Leer el archivo y filtrar comandos internos de psql (líneas que empiezan con '\')
+                            clean_lines = []
                             with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
-                                sql_content = f.read()
+                                for line in f:
+                                    # Ignorar metacomandos de psql para evitar errores de sintaxis
+                                    if line.strip().startswith('\\'):
+                                        continue
+                                    clean_lines.append(line)
                             
-                            # Ejecutar el script completo asegurando manejo de transacciones
+                            sql_content = "".join(clean_lines)
+                            
+                            # 5. Ejecutar el script SQL limpio
                             cursor.execute(sql_content)
                             
                             cursor.close()
