@@ -2651,27 +2651,38 @@ else:
                 elif not confirmar:
                     st.warning("⚠️ Debes confirmar la casilla de advertencia antes de continuar.")
                 else:
+                    temp_sql_path = "temp_restore.sql"
                     try:
                         # 1. Guardar temporalmente el archivo subido
-                        temp_sql_path = "temp_restore.sql"
                         with open(temp_sql_path, "wb") as f:
                             f.write(archivo_subido.getbuffer())
                         
                         with st.spinner("Restaurando la base de datos en la nube... Esto puede tomar unos minutos."):
-                            import sqlalchemy
+                            import psycopg2
                             
-                            # 2. Obtener credenciales directamente de la sección [postgres] de st.secrets
+                            # 2. Obtener credenciales de los secrets
                             pg_secrets = st.secrets["postgres"]
-                            db_url = f"postgresql+psycopg2://{pg_secrets['user']}:{pg_secrets['password']}@{pg_secrets['host']}:{pg_secrets['port']}/{pg_secrets['database']}"
                             
-                            # 3. Crear el motor de SQLAlchemy y ejecutar el script SQL
-                            engine = sqlalchemy.create_engine(db_url)
+                            # 3. Conexión directa con psycopg2
+                            conn = psycopg2.connect(
+                                dbname=pg_secrets['database'],
+                                user=pg_secrets['user'],
+                                password=pg_secrets['password'],
+                                host=pg_secrets['host'],
+                                port=pg_secrets['port']
+                            )
+                            conn.autocommit = True
+                            cursor = conn.cursor()
                             
+                            # 4. Leer y ejecutar el archivo SQL línea por línea / bloque por bloque
                             with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
-                                sql_script = f.read()
+                                sql_content = f.read()
                             
-                            with engine.begin() as connection:
-                                connection.execute(sqlalchemy.text(sql_script))
+                            # Ejecutar el script completo asegurando manejo de transacciones
+                            cursor.execute(sql_content)
+                            
+                            cursor.close()
+                            conn.close()
                         
                         # Limpiar archivo temporal
                         if os.path.exists(temp_sql_path):
@@ -2681,8 +2692,8 @@ else:
                         
                     except Exception as e:
                         st.error(f"❌ Error al restaurar: {e}")
-                        if os.path.exists("temp_restore.sql"):
-                            os.remove("temp_restore.sql")
+                        if os.path.exists(temp_sql_path):
+                            os.remove(temp_sql_path)
 
     elif st.session_state.get("menu_activo") == "Afiliados":
         st.subheader("🪪 Gestión del Padrón de Afiliados")
