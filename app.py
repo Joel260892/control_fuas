@@ -2641,9 +2641,9 @@ else:
         with tab_rest:
             st.write("Sube un archivo de respaldo en formato `.sql` para restaurar la base de datos.")
             
-            archivo_subido = st.file_uploader("Selecciona tu archivo .sql", type=["sql"])
+            archivo_subido = st.file_uploader("Selecciona tu archivo .sql", type=["sql"], key="uploader_restore")
             
-            confirmar = st.checkbox("Confirmo que deseo sobrescribir la base de datos")
+            confirmar = st.checkbox("Confirmo que deseo sobrescribir la base de datos", key="chk_confirm_restore")
             
             if st.button("Ejecutar Restauración"):
                 if not archivo_subido:
@@ -2658,18 +2658,19 @@ else:
                             f.write(archivo_subido.getbuffer())
                         
                         with st.spinner("Restaurando la base de datos en la nube... Esto puede tomar unos minutos."):
-                            # 2. Obtener la conexión a la base de datos usando st.connection o SQLAlchemy
-                            # (Asegúrate de que 'conn' sea tu conexión activa a Supabase)
-                            conn = st.connection("postgres", type="sql")
+                            import sqlalchemy
                             
-                            # 3. Leer y ejecutar el contenido del archivo SQL
+                            # 2. Obtener credenciales directamente de la sección [postgres] de st.secrets
+                            pg_secrets = st.secrets["postgres"]
+                            db_url = f"postgresql://{pg_secrets['user']}:{pg_secrets['password']}@{pg_secrets['host']}:{pg_secrets['port']}/{pg_secrets['database']}"
+                            
+                            # 3. Crear el motor de SQLAlchemy y ejecutar el script SQL
+                            engine = sqlalchemy.create_engine(db_url)
+                            
                             with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
                                 sql_script = f.read()
                             
-                            # Ejecutar el script SQL mediante una conexión directa de SQLAlchemy
-                            with conn.engine.begin() as connection:
-                                import sqlalchemy
-                                # Dividir por sentencias o ejecutar todo el bloque según el tamaño
+                            with engine.begin() as connection:
                                 connection.execute(sqlalchemy.text(sql_script))
                         
                         # Limpiar archivo temporal
@@ -2680,7 +2681,6 @@ else:
                         
                     except Exception as e:
                         st.error(f"❌ Error al restaurar: {e}")
-                        # Limpiar archivo temporal en caso de error
                         if os.path.exists("temp_restore.sql"):
                             os.remove("temp_restore.sql")
 
