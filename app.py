@@ -2662,7 +2662,7 @@ else:
                             
                             # 2. Obtener credenciales directamente de la sección [postgres] de st.secrets
                             pg_secrets = st.secrets["postgres"]
-                            db_url = f"postgresql://{pg_secrets['user']}:{pg_secrets['password']}@{pg_secrets['host']}:{pg_secrets['port']}/{pg_secrets['database']}"
+                            db_url = f"postgresql+psycopg2://{pg_secrets['user']}:{pg_secrets['password']}@{pg_secrets['host']}:{pg_secrets['port']}/{pg_secrets['database']}"
                             
                             # 3. Crear el motor de SQLAlchemy y ejecutar el script SQL
                             engine = sqlalchemy.create_engine(db_url)
