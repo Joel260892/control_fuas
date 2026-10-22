@@ -2639,35 +2639,50 @@ else:
 
         # --- PESTAÑA 2: RESTAURAR BACKUP ---
         with tab_rest:
-            st.warning("⚠️ **Atención:** Restaurar un respaldo sobrescribirá los datos actuales de la base de datos.")
+            st.write("Sube un archivo de respaldo en formato `.sql` para restaurar la base de datos.")
             
-            uploaded_backup = st.file_uploader("Selecciona tu archivo .sql", type=["sql"])
-            confirmar_restauracion = st.checkbox("Confirmo que deseo sobrescribir la base de datos")
+            archivo_subido = st.file_uploader("Selecciona tu archivo .sql", type=["sql"])
             
-            if st.button("🔄 Ejecutar Restauración"):
-                if uploaded_backup is not None and confirmar_restauracion:
+            confirmar = st.checkbox("Confirmo que deseo sobrescribir la base de datos")
+            
+            if st.button("Ejecutar Restauración"):
+                if not archivo_subido:
+                    st.warning("⚠️ Por favor, selecciona un archivo .sql primero.")
+                elif not confirmar:
+                    st.warning("⚠️ Debes confirmar la casilla de advertencia antes de continuar.")
+                else:
                     try:
-                        temp_filepath = os.path.join(os.getcwd(), "temp_restore.sql")
-                        with open(temp_filepath, "wb") as f:
-                            f.write(uploaded_backup.getbuffer())
+                        # 1. Guardar temporalmente el archivo subido
+                        temp_sql_path = "temp_restore.sql"
+                        with open(temp_sql_path, "wb") as f:
+                            f.write(archivo_subido.getbuffer())
                         
-                        os.environ['PGPASSWORD'] = DB_PASSWORD
-                        
-                        cmd = f'"{PSQL_PATH}" -U {DB_USER} -d {DB_NAME} -f "{temp_filepath}"'
-                        subprocess.run(cmd, shell=True, check=True)
-                        
-                        if os.path.exists(temp_filepath):
-                            os.remove(temp_filepath)
+                        with st.spinner("Restaurando la base de datos en la nube... Esto puede tomar unos minutos."):
+                            # 2. Obtener la conexión a la base de datos usando st.connection o SQLAlchemy
+                            # (Asegúrate de que 'conn' sea tu conexión activa a Supabase)
+                            conn = st.connection("postgres", type="sql")
                             
-                        st.success("¡Base de datos restaurada correctamente! Recarga la página (F5).")
+                            # 3. Leer y ejecutar el contenido del archivo SQL
+                            with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
+                                sql_script = f.read()
+                            
+                            # Ejecutar el script SQL mediante una conexión directa de SQLAlchemy
+                            with conn.engine.begin() as connection:
+                                import sqlalchemy
+                                # Dividir por sentencias o ejecutar todo el bloque según el tamaño
+                                connection.execute(sqlalchemy.text(sql_script))
+                        
+                        # Limpiar archivo temporal
+                        if os.path.exists(temp_sql_path):
+                            os.remove(temp_sql_path)
+                            
+                        st.success("¡Base de datos restaurada exitosamente en Supabase!")
                         
                     except Exception as e:
-                        st.error(f"Error al restaurar: {e}")
-                else:
-                    if uploaded_backup is None:
-                        st.warning("Por favor, sube un archivo `.sql` válido.")
-                    if not confirmar_restauracion:
-                        st.warning("Debes marcar la casilla de confirmación.")
+                        st.error(f"❌ Error al restaurar: {e}")
+                        # Limpiar archivo temporal en caso de error
+                        if os.path.exists("temp_restore.sql"):
+                            os.remove("temp_restore.sql")
 
     elif st.session_state.get("menu_activo") == "Afiliados":
         st.subheader("🪪 Gestión del Padrón de Afiliados")
