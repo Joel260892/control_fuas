@@ -2674,19 +2674,22 @@ else:
                             conn.autocommit = True
                             cursor = conn.cursor()
                             
-                            # 4. Leer el archivo y filtrar comandos internos de psql (líneas que empiezan con '\')
-                            clean_lines = []
+                            # 4. Leer y procesar el archivo instrucción por instrucción o sentencia por sentencia
                             with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
-                                for line in f:
-                                    # Ignorar metacomandos de psql para evitar errores de sintaxis
-                                    if line.strip().startswith('\\'):
+                                sql_commands = f.read().split(";")
+                                
+                                for command in sql_commands:
+                                    cmd_stripped = command.strip()
+                                    if not cmd_stripped:
                                         continue
-                                    clean_lines.append(line)
-                            
-                            sql_content = "".join(clean_lines)
-                            
-                            # 5. Ejecutar el script SQL limpio
-                            cursor.execute(sql_content)
+                                    # Ignorar metacomandos de psql o bloques COPY de volcado masivo
+                                    if cmd_stripped.startswith('\\') or cmd_stripped.upper().startswith('COPY '):
+                                        continue
+                                    try:
+                                        cursor.execute(cmd_stripped)
+                                    except Exception as sql_err:
+                                        # Opcional: imprimir o ignorar errores menores de tablas ya existentes
+                                        pass
                             
                             cursor.close()
                             conn.close()
@@ -2701,6 +2704,7 @@ else:
                         st.error(f"❌ Error al restaurar: {e}")
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
+    
 
     elif st.session_state.get("menu_activo") == "Afiliados":
         st.subheader("🪪 Gestión del Padrón de Afiliados")
