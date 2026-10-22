@@ -2657,7 +2657,7 @@ else:
                         with open(temp_sql_path, "wb") as f:
                             f.write(archivo_subido.getbuffer())
                         
-                        with st.spinner("Limpiando y restaurando datos en la nube... Por favor espera."):
+                        with st.spinner("Restaurando base de datos en la nube... Esto puede tomar unos segundos."):
                             import psycopg2
                             import io
                             
@@ -2675,14 +2675,13 @@ else:
                             conn.autocommit = True
                             cursor = conn.cursor()
                             
-                            # 4. Limpiar (Truncate) las tablas principales para evitar duplicados o datos antiguos
-                            # Ajusta los nombres de tus tablas si son diferentes (ej. 'fuas', 'usuarios', etc.)
+                            # 4. Limpiar tablas existentes de forma segura
                             try:
-                                cursor.execute("DO $$ DECLARE r record; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE;'; END LOOP; END $$;")
-                            except Exception:
-                                pass
+                                cursor.execute("DO $$ DECLARE r record; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE;'; END LOOP; END $$;")
+                            except Exception as drop_err:
+                                st.warning(f"Nota al limpiar tablas: {drop_err}")
                             
-                            # 5. Leer y procesar el archivo SQL y bloques COPY
+                            # 5. Leer y procesar el archivo SQL línea por línea
                             with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
                                 lines = f.readlines()
                             
@@ -2690,7 +2689,7 @@ else:
                             copy_buffer = []
                             sql_buffer = []
                             
-                            for line in lines:
+                            for line_num, line in enumerate(lines, 1):
                                 stripped = line.strip()
                                 if not stripped or stripped.startswith('--') or stripped.startswith('\\'):
                                     continue
@@ -2700,8 +2699,9 @@ else:
                                         data_str = "".join(copy_buffer)
                                         try:
                                             cursor.copy_expert(current_copy_cmd, io.StringIO(data_str))
-                                        except Exception:
-                                            pass
+                                        except Exception as copy_err:
+                                            # Mostrar el error exacto si falla un bloque COPY
+                                            raise Exception(f"Error en bloque COPY (línea {line_num}): {copy_err}")
                                         current_copy_cmd = None
                                         copy_buffer = []
                                     else:
@@ -2716,8 +2716,10 @@ else:
                                         sql_buffer = []
                                         try:
                                             cursor.execute(full_sql)
-                                        except Exception:
-                                            pass
+                                        except Exception as sql_err:
+                                            # Omitir errores menores de extensiones o configuraciones de rol, pero registrar si es crítico
+                                            if "already exists" not in str(sql_err) and "role" not in str(sql_err):
+                                                raise Exception(f"Error en SQL (línea {line_num}): {sql_err}\nConsulta: {full_sql[:100]}...")
                                             
                             cursor.close()
                             conn.close()
@@ -2726,13 +2728,11 @@ else:
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
                             
-                        st.success("¡Base de datos limpiada y restaurada exitosamente con todos los registros!")
-                        
-                        # Recargar la app para actualizar las métricas en pantalla
+                        st.success("¡Base de datos restaurada exitosamente! Recargando sistema...")
                         st.rerun()
                         
                     except Exception as e:
-                        st.error(f"❌ Error al restaurar: {e}")
+                        st.error(f"❌ Error crítico al restaurar: {e}")
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
     
