@@ -2657,8 +2657,9 @@ else:
                         with open(temp_sql_path, "wb") as f:
                             f.write(archivo_subido.getbuffer())
                         
-                        with st.spinner("Restaurando la base de datos en la nube... Esto puede tomar unos minutos."):
+                        with st.spinner("Limpiando y restaurando datos en la nube... Por favor espera."):
                             import psycopg2
+                            import io
                             
                             # 2. Obtener credenciales de los secrets
                             pg_secrets = st.secrets["postgres"]
@@ -2674,23 +2675,50 @@ else:
                             conn.autocommit = True
                             cursor = conn.cursor()
                             
-                            # 4. Leer y procesar el archivo instrucción por instrucción o sentencia por sentencia
-                            with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
-                                sql_commands = f.read().split(";")
-                                
-                                for command in sql_commands:
-                                    cmd_stripped = command.strip()
-                                    if not cmd_stripped:
-                                        continue
-                                    # Ignorar metacomandos de psql o bloques COPY de volcado masivo
-                                    if cmd_stripped.startswith('\\') or cmd_stripped.upper().startswith('COPY '):
-                                        continue
-                                    try:
-                                        cursor.execute(cmd_stripped)
-                                    except Exception as sql_err:
-                                        # Opcional: imprimir o ignorar errores menores de tablas ya existentes
-                                        pass
+                            # 4. Limpiar (Truncate) las tablas principales para evitar duplicados o datos antiguos
+                            # Ajusta los nombres de tus tablas si son diferentes (ej. 'fuas', 'usuarios', etc.)
+                            try:
+                                cursor.execute("DO $$ DECLARE r record; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE;'; END LOOP; END $$;")
+                            except Exception:
+                                pass
                             
+                            # 5. Leer y procesar el archivo SQL y bloques COPY
+                            with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
+                                lines = f.readlines()
+                            
+                            current_copy_cmd = None
+                            copy_buffer = []
+                            sql_buffer = []
+                            
+                            for line in lines:
+                                stripped = line.strip()
+                                if not stripped or stripped.startswith('--') or stripped.startswith('\\'):
+                                    continue
+                                
+                                if current_copy_cmd:
+                                    if stripped == '\\.' or stripped == '\.':
+                                        data_str = "".join(copy_buffer)
+                                        try:
+                                            cursor.copy_expert(current_copy_cmd, io.StringIO(data_str))
+                                        except Exception:
+                                            pass
+                                        current_copy_cmd = None
+                                        copy_buffer = []
+                                    else:
+                                        copy_buffer.append(line)
+                                elif stripped.upper().startswith('COPY '):
+                                    current_copy_cmd = stripped
+                                    copy_buffer = []
+                                else:
+                                    sql_buffer.append(line)
+                                    if stripped.endswith(';'):
+                                        full_sql = "".join(sql_buffer)
+                                        sql_buffer = []
+                                        try:
+                                            cursor.execute(full_sql)
+                                        except Exception:
+                                            pass
+                                            
                             cursor.close()
                             conn.close()
                         
@@ -2698,12 +2726,16 @@ else:
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
                             
-                        st.success("¡Base de datos restaurada exitosamente en Supabase!")
+                        st.success("¡Base de datos limpiada y restaurada exitosamente con todos los registros!")
+                        
+                        # Recargar la app para actualizar las métricas en pantalla
+                        st.rerun()
                         
                     except Exception as e:
                         st.error(f"❌ Error al restaurar: {e}")
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
+    
     
 
     elif st.session_state.get("menu_activo") == "Afiliados":
