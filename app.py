@@ -27,11 +27,27 @@ st.set_page_config(page_title="Control de FUAs Observadas", page_icon="📋", la
 # Ocultar marca/menú de Streamlit manteniendo visible el botón de la barra lateral
 hide_streamlit_style = """
     <style>
+    /* Ocultar menú superior genérico y footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {background-color: transparent;}
-    [data-testid="stHeader"] {background-color: transparent;}
-    .stAppDeployButton {display: none;}
+    
+    /* Ocultar el botón rojo flotante de la esquina inferior derecha */
+    .viewerBadge_container__1QSob, 
+    div.viewerBadge_container__1QSob,
+    a[href*="streamlit.io/cloud"] {
+        display: none !important;
+    }
+    
+    /* Asegurar que la cabecera muestre el botón para desplegar la barra lateral */
+    header[data-testid="stHeader"] {
+        background-color: transparent !important;
+        visibility: visible !important;
+    }
+    
+    /* Forzar visibilidad del botón de colapsar la barra lateral */
+    button[kind="header"] {
+        visibility: visible !important;
+    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
