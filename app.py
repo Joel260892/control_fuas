@@ -24,6 +24,18 @@ PSQL_PATH = r"C:\Program Files\PostgreSQL\18\bin\psql.exe"
 # Configuración de la página (layout 'centered' ayuda a que el login luzca mejor centrado)
 st.set_page_config(page_title="Control de FUAs Observadas", page_icon="📋", layout="wide")
 
+# Ocultar marca/menú de Streamlit manteniendo visible el botón de la barra lateral
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {background-color: transparent;}
+    [data-testid="stHeader"] {background-color: transparent;}
+    .stAppDeployButton {display: none;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # ==========================================
 # 1. FUNCIONES DE CONEXIÓN Y BASE DE DATOS
 # ==========================================
