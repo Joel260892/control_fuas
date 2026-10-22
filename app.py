@@ -1,0 +1,3102 @@
+from datetime import datetime
+import os
+
+import streamlit as st
+import psycopg2
+import bcrypt
+import pandas as pd
+import io
+import plotly.express as px
+import subprocess
+import numpy as np
+from sqlalchemy import create_engine
+
+
+# --- AQUÍ ARRIBA COLOCAS LAS CREDENCIALES Y RUTAS ---
+DB_USER = st.secrets["postgres"]["user"]
+DB_NAME = st.secrets["postgres"]["database"]
+DB_PASSWORD = st.secrets["postgres"]["password"]
+
+# Rutas de las herramientas de PostgreSQL (Ajusta el "15" si tu versión es diferente)
+PG_DUMP_PATH = r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+PSQL_PATH = r"C:\Program Files\PostgreSQL\18\bin\psql.exe"
+
+# Configuración de la página (layout 'centered' ayuda a que el login luzca mejor centrado)
+st.set_page_config(page_title="Control de FUAs Observadas", page_icon="📋", layout="wide")
+
+# ==========================================
+# 1. FUNCIONES DE CONEXIÓN Y BASE DE DATOS
+# ==========================================
+def init_connection():
+    return psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=str(st.secrets["postgres"]["password"]),
+        port=st.secrets["postgres"]["port"]
+    )
+
+def validar_login(username, password):
+    conn = init_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT dni, username, password_hash, nombre_completo, es_admin, rol FROM usuarios WHERE username = %s AND activo = TRUE;",
+            (username,)
+        )
+        user = cursor.fetchone()
+        
+        if user:
+            dni, db_username, db_password_hash, nombre_completo, es_admin, db_rol = user
+            
+            es_valida = False
+            try:
+                es_valida = bcrypt.checkpw(password.encode('utf-8'), db_password_hash.encode('utf-8'))
+            except Exception:
+                es_valida = (password == db_password_hash)
+            
+            if es_valida:
+                if es_admin:
+                    rol_final = "Administrador"
+                else:
+                    rol_final = db_rol if db_rol else "Digitador"
+                    
+                return {
+                    "dni": str(dni), 
+                    "username": str(db_username), 
+                    "nombre": str(nombre_completo), 
+                    "es_admin": bool(es_admin),
+                    "rol": rol_final
+                }
+        return None
+    except Exception as e:
+        try:
+            conn.rollback()
+            cursor.execute(
+                "SELECT dni, username, password_hash, nombre_completo, es_admin FROM usuarios WHERE username = %s AND activo = TRUE;",
+                (username,)
+            )
+            user = cursor.fetchone()
+            if user:
+                dni, db_username, db_password_hash, nombre_completo, es_admin = user
+                es_valida = bcrypt.checkpw(password.encode('utf-8'), db_password_hash.encode('utf-8')) if 'password_hash' in locals() else (password == db_password_hash)
+                if es_valida:
+                    return {
+                        "dni": str(dni),
+                        "username": str(db_username),
+                        "nombre": str(nombre_completo),
+                        "es_admin": bool(es_admin),
+                        "rol": "Administrador" if es_admin else "Digitador"
+                    }
+        except Exception:
+            pass
+        st.error(f"Error en la base de datos: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+def registrar_nuevo_usuario(dni, username, password, nombre_completo, rol_seleccionado):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        es_admin_bool = True if rol_seleccionado == "Administrador" else False
+        
+        try:
+            cur.execute(
+                """
+                INSERT INTO usuarios (dni, username, password_hash, nombre_completo, es_admin, rol, activo)
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE);
+                """,
+                (dni, username, password_hash, nombre_completo, es_admin_bool, rol_seleccionado)
+            )
+        except Exception:
+            conn.rollback()
+            cur.execute(
+                """
+                INSERT INTO usuarios (dni, username, password_hash, nombre_completo, es_admin, activo)
+                VALUES (%s, %s, %s, %s, %s, TRUE);
+                """,
+                (dni, username, password_hash, nombre_completo, es_admin_bool)
+            )
+            
+        conn.commit()
+        return True, "¡Usuario registrado exitosamente!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al registrar: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def actualizar_usuario(dni, username, nombre_completo, rol_seleccionado, activo, nueva_password=None):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        es_admin_bool = True if rol_seleccionado == "Administrador" else False
+        
+        if nueva_password and nueva_password.strip() != "":
+            password_hash = bcrypt.hashpw(nueva_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            try:
+                cur.execute(
+                    """
+                    UPDATE usuarios 
+                    SET username = %s, nombre_completo = %s, es_admin = %s, rol = %s, activo = %s, password_hash = %s
+                    WHERE dni = %s;
+                    """,
+                    (username, nombre_completo, es_admin_bool, rol_seleccionado, activo, password_hash, dni)
+                )
+            except Exception:
+                conn.rollback()
+                cur.execute(
+                    """
+                    UPDATE usuarios 
+                    SET username = %s, nombre_completo = %s, es_admin = %s, activo = %s, password_hash = %s
+                    WHERE dni = %s;
+                    """,
+                    (username, nombre_completo, es_admin_bool, activo, password_hash, dni)
+                )
+        else:
+            try:
+                cur.execute(
+                    """
+                    UPDATE usuarios 
+                    SET username = %s, nombre_completo = %s, es_admin = %s, rol = %s, activo = %s
+                    WHERE dni = %s;
+                    """,
+                    (username, nombre_completo, es_admin_bool, rol_seleccionado, activo, dni)
+                )
+            except Exception:
+                conn.rollback()
+                cur.execute(
+                    """
+                    UPDATE usuarios 
+                    SET username = %s, nombre_completo = %s, es_admin = %s, activo = %s
+                    WHERE dni = %s;
+                    """,
+                    (username, nombre_completo, es_admin_bool, activo, dni)
+                )
+                
+        conn.commit()
+        return True, "¡Usuario actualizado exitosamente!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al actualizar: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def eliminar_usuario(dni):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM usuarios WHERE dni = %s;", (dni,))
+        conn.commit()
+        return True, "¡Usuario eliminado correctamente!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"No se puede eliminar porque tiene registros asociados. Te sugerimos desactivarlo."
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_usuarios():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        try:
+            cur.execute("SELECT dni, username, nombre_completo, COALESCE(rol, CASE WHEN es_admin THEN 'Administrador' ELSE 'Digitador' END), activo, creado_en FROM usuarios ORDER BY creado_en DESC;")
+        except Exception:
+            conn.rollback()
+            cur.execute("SELECT dni, username, nombre_completo, CASE WHEN es_admin THEN 'Administrador' ELSE 'Digitador' END, activo, creado_en FROM usuarios ORDER BY creado_en DESC;")
+        return cur.fetchall()
+    except Exception as e:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def buscar_afiliado_por_dni(dni_búsqueda):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT dni, nombre, appaterno, apmaterno, fecha_nacimiento
+            FROM afiliados
+            WHERE TRIM(dni::text) = TRIM(%s);
+            """,
+            (str(dni_búsqueda),)
+        )
+        resultado = cur.fetchone()
+        return resultado
+    except Exception as e:
+        st.error(f"Error en la consulta de afiliados: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_lista_establecimientos():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        # Usamos nombre_establecimiento
+        cur.execute("SELECT id, nombre_establecimiento FROM establecimientos WHERE activo = TRUE ORDER BY nombre_establecimiento ASC;")
+        return cur.fetchall()
+    except Exception:
+        try:
+            cur.execute("SELECT id, nombre_establecimiento FROM establecimientos ORDER BY nombre_establecimiento ASC;")
+            return cur.fetchall()
+        except Exception:
+            return []
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_lista_profesionales():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT dni, nombres_apellidos, profesion_o_especialidad 
+            FROM profesionales 
+            WHERE activo = TRUE 
+            ORDER BY nombres_apellidos ASC;
+            """
+        )
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error al obtener profesionales: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def registrar_fua_observada(datos):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id FROM fuas_observadas WHERE TRIM(numero_fua) = TRIM(%s) LIMIT 1;",
+            (datos["numero_fua"],)
+        )
+        if cur.fetchone():
+            return False, f"⚠️ El Nº de FUA **{datos['numero_fua']}** ya se encuentra registrado en el sistema."
+
+        # Procesamos la fecha de atención de forma segura:
+        # Si es un objeto de fecha válido, lo convertimos a string; si es None o vacío, enviamos None (NULL en la BD)
+        f_atencion = datos.get("fecha_atencion_fua")
+        fecha_valida = f_atencion.strftime("%Y-%m-%d") if f_atencion else None
+
+        cur.execute(
+            """
+            INSERT INTO fuas_observadas (
+                numero_fua,
+                id_prestacion,
+                nombre_prestacion,
+                establecimiento_id, 
+                afiliado_dni, 
+                afiliado_nombre, 
+                afiliado_appaterno, 
+                afiliado_apmaterno, 
+                afiliado_fecha_nacimiento, 
+                profesional_dni, 
+                digitador_dni, 
+                tipo_observacion, 
+                detalle_observacion, 
+                fecha_atencion_fua, 
+                estado
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'Pendiente');
+            """,
+            (
+                datos["numero_fua"],
+                datos["id_prestacion"],
+                datos["nombre_prestacion"],
+                datos["establecimiento_id"],
+                datos["afiliado_dni"],
+                datos["afiliado_nombre"],
+                datos["afiliado_appaterno"],
+                datos["afiliado_apmaterno"],
+                datos["afiliado_fecha_nacimiento"],
+                datos["profesional_dni"],
+                datos["digitador_dni"],
+                datos["tipo_observacion"],
+                datos["detalle_observacion"],
+                fecha_valida  # Usamos la variable tratada de forma segura
+            )
+        )
+        conn.commit()
+        return True, "¡FUA observada registrada con éxito!"
+    except Exception as e:
+        conn.rollback()
+        if "unique" in str(e).lower() or "duplicad" in str(e).lower():
+            return False, f"⚠️ El Nº de FUA **{datos['numero_fua']}** ya existe registrado."
+        return False, f"Error al guardar el registro: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_fuas_observadas():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 
+                f.id, 
+                f.numero_fua, 
+                e.nombre_establecimiento AS establecimiento, 
+                f.afiliado_dni, 
+                CONCAT(f.afiliado_nombre, ' ', f.afiliado_appaterno, ' ', f.afiliado_apmaterno) AS paciente, 
+                p.nombres_apellidos AS profesional,  -- 👈 Usamos la columna exacta de tu tabla
+                f.tipo_observacion, 
+                f.fecha_atencion_fua, 
+                f.estado, 
+                f.fecha_registro,
+                f.fecha_correccion,
+                f.digitador_dni
+            FROM fuas_observadas f
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+            LEFT JOIN profesionales p ON f.profesional_dni = p.dni
+            ORDER BY f.fecha_registro DESC;
+            """
+        )
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error al obtener la bandeja de FUAs: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def actualizar_estado_fua(fua_id, nuevo_estado):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        if nuevo_estado == "Corregido":
+            cur.execute(
+                """
+                UPDATE fuas_observadas 
+                SET estado = %s, fecha_correccion = NOW()
+                WHERE id = %s;
+                """,
+                (nuevo_estado, fua_id)
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE fuas_observadas 
+                SET estado = %s, fecha_correccion = NULL
+                WHERE id = %s;
+                """,
+                (nuevo_estado, fua_id)
+            )
+        conn.commit()
+        return True, "¡Estado de la FUA actualizado correctamente!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al actualizar: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def registrar_establecimiento(codigo_renaes, nombre_establecimiento):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO establecimientos (codigo_renaes, nombre_establecimiento, activo)
+            VALUES (%s, %s, TRUE);
+            """,
+            (codigo_renaes.strip(), nombre_establecimiento.strip())
+        )
+        conn.commit()
+        return True, "¡Establecimiento registrado con éxito!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al registrar establecimiento: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_todos_establecimientos():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, codigo_renaes, nombre_establecimiento, activo FROM establecimientos ORDER BY nombre_establecimiento ASC;")
+        return cur.fetchall()
+    except Exception:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def actualizar_establecimiento(id_est, codigo_renaes, nombre_establecimiento, activo):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE establecimientos 
+            SET codigo_renaes = %s, nombre_establecimiento = %s, activo = %s
+            WHERE id = %s;
+            """,
+            (codigo_renaes.strip(), nombre_establecimiento.strip(), activo, id_est)
+        )
+        conn.commit()
+        return True, "¡Establecimiento actualizado correctamente!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al actualizar establecimiento: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def registrar_profesional(dni, nombres_apellidos, profesion_o_especialidad, establecimiento_id):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO profesionales (dni, nombres_apellidos, profesion_o_especialidad, establecimiento, activo)
+            VALUES (%s, %s, %s, %s, TRUE);
+            """,
+            (dni.strip(), nombres_apellidos.strip(), profesion_o_especialidad.strip(), establecimiento_id)
+        )
+        conn.commit()
+        return True, "¡Profesional registrado con éxito!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al registrar profesional: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_todos_profesionales():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT p.dni, p.nombres_apellidos, p.profesion_o_especialidad, e.nombre_establecimiento, p.activo, p.establecimiento
+            FROM profesionales p
+            LEFT JOIN establecimientos e ON p.establecimiento = e.id
+            ORDER BY p.nombres_apellidos ASC;
+            """
+        )
+        return cur.fetchall()
+    except Exception:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def actualizar_profesional(dni, nombres_apellidos, profesion_o_especialidad, establecimiento_id, activo):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE profesionales 
+            SET nombres_apellidos = %s, profesion_o_especialidad = %s, establecimiento = %s, activo = %s
+            WHERE dni = %s;
+            """,
+            (nombres_apellidos.strip(), profesion_o_especialidad.strip(), establecimiento_id, activo, dni.strip())
+        )
+        conn.commit()
+        return True, "¡Profesional actualizado correctamente!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error al actualizar profesional: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_estadisticas_generales():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 
+                COUNT(*) AS total,
+                SUM(CASE WHEN estado = 'Pendiente' THEN 1 ELSE 0 END) AS total_pendientes,
+                SUM(CASE WHEN estado = 'Corregido' THEN 1 ELSE 0 END) AS total_corregidos
+            FROM fuas_observadas;
+            """
+        )
+        return cur.fetchone()
+    except Exception:
+        return (0, 0, 0)
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_reporte_por_establecimiento():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 
+                COALESCE(e.nombre_establecimiento, 'Sin Establecimiento') AS establecimiento,
+                SUM(CASE WHEN f.estado = 'Pendiente' THEN 1 ELSE 0 END) AS pendientes,
+                SUM(CASE WHEN f.estado = 'Corregido' THEN 1 ELSE 0 END) AS corregidos,
+                COUNT(*) AS total
+            FROM fuas_observadas f
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+            GROUP BY e.nombre_establecimiento
+            ORDER BY total DESC;
+            """
+        )
+        return cur.fetchall()
+    except Exception:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_reporte_por_profesional():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 
+                COALESCE(NULLIF(p.nombres_apellidos, ''), NULLIF(CONCAT('DNI: ', f.profesional_dni), 'DNI: '), 'Sin Profesional Asignado') AS profesional,
+                COALESCE(NULLIF(p.profesion_o_especialidad, ''), 'N/A') AS especialidad,
+                COALESCE(NULLIF(e.nombre_establecimiento, ''), 'Sin Establecimiento') AS establecimiento,
+                SUM(CASE WHEN f.estado = 'Pendiente' THEN 1 ELSE 0 END) AS pendientes,
+                SUM(CASE WHEN f.estado = 'Corregido' THEN 1 ELSE 0 END) AS corregidos,
+                COUNT(*) AS total
+            FROM fuas_observadas f
+            LEFT JOIN profesionales p ON TRIM(f.profesional_dni) = TRIM(p.dni)
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+            GROUP BY f.profesional_dni, p.nombres_apellidos, p.profesion_o_especialidad, e.nombre_establecimiento
+            ORDER BY total DESC;
+            """
+        )
+        resultados = cur.fetchall()
+        return resultados
+    except Exception as e:
+        print("ERROR SQL PROFESIONALES:", e)
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_reporte_filtrado(fecha_inicio, fecha_fin, establecimientos_sel, profesionales_sel):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        query = """
+            SELECT 
+                f.numero_fua,  -- <--- Aquí debe estar numero_fua
+                f.fecha_registro,
+                COALESCE(NULLIF(p.nombres_apellidos, ''), NULLIF(CONCAT('DNI: ', f.profesional_dni), 'DNI: '), 'Sin Profesional Asignado') AS profesional,
+                COALESCE(NULLIF(p.profesion_o_especialidad, ''), 'N/A') AS especialidad,
+                COALESCE(e.nombre_establecimiento, 'Sin Establecimiento') AS establecimiento,
+                f.estado
+            FROM fuas_observadas f
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+            LEFT JOIN profesionales p ON TRIM(f.profesional_dni::text) = TRIM(p.dni::text)
+            WHERE f.fecha_registro::date >= %s AND f.fecha_registro::date <= %s
+        """
+        params = [fecha_inicio, fecha_fin]
+
+        if establecimientos_sel:
+            query += " AND e.nombre_establecimiento = ANY(%s)"
+            params.append(establecimientos_sel)
+
+        if profesionales_sel:
+            query += " AND COALESCE(NULLIF(p.nombres_apellidos, ''), NULLIF(CONCAT('DNI: ', f.profesional_dni), 'DNI: '), 'Sin Profesional Asignado') = ANY(%s)"
+            params.append(profesionales_sel)
+
+        query += " ORDER BY f.fecha_registro DESC;"
+
+        cur.execute(query, params)
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error detallado en la consulta SQL: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_reporte_completo_filtrado(fecha_inicio, fecha_fin, establecimientos_sel, profesionales_sel):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        query = """
+            SELECT 
+                f.id AS fua_id,
+                f.numero_fua,
+                COALESCE(e.nombre_establecimiento, 'Sin Establecimiento') AS establecimiento,
+                f.afiliado_dni,
+                f.afiliado_nombre,
+                f.afiliado_appaterno,
+                f.afiliado_apmaterno,
+                f.afiliado_fecha_nacimiento,
+                f.profesional_dni,
+                COALESCE(p.nombres_apellidos, 'Sin Profesional Asignado') AS profesional_nombre,
+                COALESCE(p.profesion_o_especialidad, 'N/A') AS profesional_especialidad,
+                f.digitador_dni,
+                f.tipo_observacion,
+                f.detalle_observacion,
+                f.fecha_atencion_fua,
+                f.estado,
+                f.fecha_registro,
+                f.fecha_correccion
+            FROM fuas_observadas f
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+            LEFT JOIN profesionales p ON TRIM(f.profesional_dni::text) = TRIM(p.dni::text)
+            WHERE f.fecha_registro::date >= %s AND f.fecha_registro::date <= %s
+        """
+        params = [fecha_inicio, fecha_fin]
+
+        if establecimientos_sel:
+            query += " AND e.nombre_establecimiento = ANY(%s)"
+            params.append(establecimientos_sel)
+
+        if profesionales_sel:
+            query += " AND COALESCE(NULLIF(p.nombres_apellidos, ''), NULLIF(CONCAT('DNI: ', f.profesional_dni), 'DNI: '), 'Sin Profesional Asignado') = ANY(%s)"
+            params.append(profesionales_sel)
+
+        query += " ORDER BY f.fecha_registro DESC;"
+
+        cur.execute(query, params)
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error detallado en la consulta SQL completa: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def generar_excel_reportes():
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta SQL limpia SIN incluir f.id
+        query = """
+            SELECT 
+                f.numero_fua,
+                COALESCE(e.nombre_establecimiento, 'Sin Establecimiento') AS establecimiento,
+                f.afiliado_dni,
+                f.afiliado_nombre,
+                f.afiliado_appaterno,
+                f.afiliado_apmaterno,
+                f.afiliado_fecha_nacimiento,
+                f.profesional_dni,
+                COALESCE(p.nombres_apellidos, 'Sin Profesional Asignado') AS profesional_nombre,
+                COALESCE(p.profesion_o_especialidad, 'N/A') AS profesional_especialidad,
+                f.digitador_dni,
+                f.tipo_observacion,
+                f.detalle_observacion,
+                f.fecha_atencion_fua,
+                f.estado,
+                f.fecha_registro,
+                f.fecha_correccion
+            FROM fuas_observadas f
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+            LEFT JOIN profesionales p ON TRIM(f.profesional_dni::text) = TRIM(p.dni::text)
+            ORDER BY f.fecha_registro DESC;
+        """
+        cur.execute(query)
+        datos = cur.fetchall()
+        
+        # DataFrame con las columnas exactas (sin rastro de ID Interno)
+        df = pd.DataFrame(
+            datos, 
+            columns=[
+                "Nro FUA", "Establecimiento", "Afiliado DNI", 
+                "Afiliado Nombres", "Afiliado Ap. Paterno", "Afiliado Ap. Materno", 
+                "Afiliado F. Nacimiento", "Profesional DNI", "Profesional Nombre", 
+                "Profesional Especialidad", "Digitador DNI", "Tipo de Observación", 
+                "Detalle Observación", "Fecha Atención FUA", "Estado", 
+                "Fecha Registro", "Fecha Corrección"
+            ]
+        )
+        
+        import io
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Reportes_Generales')
+        return output.getvalue()
+    except Exception as e:
+        print(f"Error generando Excel general: {e}")
+        return b""
+    finally:
+        cur.close()
+        conn.close()
+
+def obtener_todos_profesionales():
+    # Ejemplo de cómo debe estructurarse tu función backend para la base de datos:
+    query = """
+        SELECT 
+            p.dni,
+            p.nombres_apellidos,
+            p.profesion_o_especialidad,
+            e.nombre_establecimiento,
+            p.activo,
+            p.establecimiento AS establecimiento_id
+        FROM profesionales p
+        LEFT JOIN establecimientos e ON p.establecimiento::integer = e.id
+        ORDER BY p.nombres_apellidos ASC;
+    """
+    # Ejecutas la query y devuelves los registros como lista de tuplas/diccionarios
+
+def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo crea adentro
+    st.title("📊 Estadisticas de FUAs Observadas")
+    st.markdown(
+        "Resumen y métricas en tiempo real de las observaciones registradas en los establecimientos de salud."
+    )
+
+    # 1. Obtener conexión usando tu función existente
+    try:
+        conn = init_connection()
+    except Exception as e:
+        st.error(f"Error al conectar con la base de datos: {e}")
+        return
+
+    # 2. Cargar datos directamente desde la tabla 'fuas_observadas'
+    try:
+        query_fuas = """
+            SELECT 
+                f.id,
+                f.numero_fua,
+                e.nombre_establecimiento AS establecimiento,
+                f.afiliado_dni,
+                f.tipo_observacion,
+                f.fecha_atencion_fua,
+                f.estado,
+                f.fecha_registro
+            FROM fuas_observadas f
+            LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+        """
+        df_fuas = pd.read_sql(query_fuas, conn)
+    except Exception as e:
+        st.error(f"Error al consultar los datos de las FUAs: {e}")
+        conn.close()
+        return
+    finally:
+        conn.close()  # Cerramos la conexión para liberar recursos
+
+    if df_fuas.empty:
+        st.info(
+            "No hay registros de FUAs observadas en la base de datos todavía."
+        )
+        return
+
+    # ---------------------------------------------------------
+    # 3. FILTRO LATERAL OPCIONAL POR ESTABLECIMIENTO
+    # ---------------------------------------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔍 Filtros del Dashboard")
+
+    lista_estab = ["Todos"] + sorted(
+        df_fuas["establecimiento"].dropna().unique().tolist()
+    )
+    estab_seleccionado = st.sidebar.selectbox(
+        "Filtrar por Establecimiento", lista_estab
+    )
+
+    if estab_seleccionado != "Todos":
+        df_fuas = df_fuas[df_fuas["establecimiento"] == estab_seleccionado]
+
+    # ---------------------------------------------------------
+    # 4. TARJETAS DE MÉTRICAS (KPIs)
+    # ---------------------------------------------------------
+    total_observados = len(df_fuas)
+    pendientes = len(
+        df_fuas[df_fuas["estado"].astype(str).str.lower() == "pendiente"]
+    )
+    corregidos = len(
+        df_fuas[df_fuas["estado"].astype(str).str.lower() == "corregido"]
+    )
+    num_establecimientos = df_fuas["establecimiento"].nunique()
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(
+            label="Total FUAs Observadas", value=f"{total_observados:,}"
+        )
+    with col2:
+        st.metric(
+            label="Pendientes",
+            value=f"{pendientes:,}",
+            delta="Requieren atención",
+            delta_color="inverse",
+        )
+    with col3:
+        st.metric(
+            label="Corregidas",
+            value=f"{corregidos:,}",
+            delta="Completadas",
+        )
+    with col4:
+        st.metric(
+            label="Establecimientos con datos",
+            value=f"{num_establecimientos} / 6",
+        )
+
+    st.markdown("---")
+
+    # ---------------------------------------------------------
+    # 5. GRÁFICOS INTERACTIVOS (PLOTLY)
+    # ---------------------------------------------------------
+    # Definimos la plantilla y colores según el tema seleccionado
+    if "Claro" in tema_seleccionado:
+        plotly_template = "plotly_white"
+        bg_grafico = "#ffffff"
+        color_texto = "#1a1d20"
+    else:
+        plotly_template = "plotly_dark"
+        bg_grafico = "rgba(0,0,0,0)"
+        color_texto = "#fafafa"
+
+    col_g1, col_g2 = st.columns(2)
+
+    with col_g1:
+        st.subheader("🏥 Observaciones por Establecimiento")
+        df_estab_counts = (
+            df_fuas["establecimiento"]
+            .value_counts()
+            .reset_index()
+        )
+        df_estab_counts.columns = ["Establecimiento", "Total"]
+
+        fig_bar = px.bar(
+            df_estab_counts,
+            x="Establecimiento",
+            y="Total",
+            color="Establecimiento",
+            text="Total",
+            title="Cantidad de FUAs por IPRESS",
+        )
+        fig_bar.update_traces(textposition="outside")
+
+        fig_bar.update_layout(
+            template=plotly_template,
+            paper_bgcolor=bg_grafico,
+            plot_bgcolor=bg_grafico,
+            font=dict(color=color_texto),
+            showlegend=False, 
+            xaxis_title="", 
+            yaxis_title="FUAs"
+        )
+        fig_bar.update_layout(showlegend=False, xaxis_title="", yaxis_title="FUAs")
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with col_g2:
+        st.subheader("📌 Estado de las Observaciones")
+        df_estado_counts = (
+            df_fuas["estado"].value_counts().reset_index()
+        )
+        df_estado_counts.columns = ["Estado", "Cantidad"]
+
+        fig_pie = px.pie(
+            df_estado_counts,
+            names="Estado",
+            values="Cantidad",
+            hole=0.4,
+            title="Proporción por Estado",
+            color_discrete_sequence=px.colors.qualitative.Set2,
+        
+        )
+        fig_pie.update_layout(
+            template=plotly_template,
+            paper_bgcolor=bg_grafico,
+            plot_bgcolor=bg_grafico,
+            font=dict(color=color_texto)
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+def buscar_fua_por_numero(numero_fua):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 
+                f.id,
+                f.numero_fua,
+                f.establecimiento_id,
+                f.afiliado_dni,
+                f.afiliado_nombre,
+                f.afiliado_appaterno,
+                f.afiliado_apmaterno,
+                f.afiliado_fecha_nacimiento,
+                f.profesional_dni,
+                f.tipo_observacion,
+                f.detalle_observacion,
+                f.fecha_atencion_fua,
+                f.estado,
+                f.id_prestacion,
+                f.nombre_prestacion
+            FROM fuas_observadas f
+            WHERE TRIM(f.numero_fua) = TRIM(%s)
+            LIMIT 1;
+            """,
+            (numero_fua,)
+        )
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "numero_fua": row[1],
+                "establecimiento_id": row[2],
+                "afiliado_dni": row[3],
+                "afiliado_nombre": row[4],
+                "afiliado_appaterno": row[5],
+                "afiliado_apmaterno": row[6],
+                "afiliado_fecha_nacimiento": row[7],
+                "profesional_dni": row[8],
+                "tipo_observacion": row[9],
+                "detalle_observacion": row[10],
+                "fecha_atencion_fua": row[11],
+                "estado": row[12],
+                "id_prestacion": row[13],
+                "nombre_prestacion": row[14]
+            }
+        return None
+    except Exception as e:
+        print("ERROR AL BUSCAR FUA POR NÚMERO:", e)
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+def actualizar_fua_observada(datos):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE fuas_observadas
+            SET 
+                numero_fua = %s,
+                id_prestacion = %s,
+                nombre_prestacion = %s,
+                establecimiento_id = %s,
+                afiliado_dni = %s,
+                afiliado_nombre = %s,
+                afiliado_appaterno = %s,
+                afiliado_apmaterno = %s,
+                afiliado_fecha_nacimiento = %s,
+                profesional_dni = %s,
+                tipo_observacion = %s,
+                detalle_observacion = %s,
+                fecha_atencion_fua = %s
+            WHERE id = %s;
+            """,
+            (
+                datos["numero_fua"],
+                datos["id_prestacion"],
+                datos["nombre_prestacion"],
+                datos["establecimiento_id"],
+                datos["afiliado_dni"],
+                datos["afiliado_nombre"],
+                datos["afiliado_appaterno"],
+                datos["afiliado_apmaterno"],
+                datos["afiliado_fecha_nacimiento"],
+                datos["profesional_dni"],
+                datos["tipo_observacion"],
+                datos["detalle_observacion"],
+                datos["fecha_atencion_fua"],
+                datos["id"]
+            )
+        )
+        conn.commit()
+        return True, "FUA actualizada correctamente."
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        cur.close()
+        conn.close()
+
+def buscar_descripcion_prestacion(codigo):
+    if not codigo or not str(codigo).strip():
+        return ""
+    
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta coincidiendo exactamente con las columnas de tu tabla en PostgreSQL
+        cur.execute(
+            "SELECT nombre_prestacion FROM prestaciones WHERE id_prestacion = %s;", 
+            (str(codigo).strip(),)
+        )
+        resultado = cur.fetchone()
+        return resultado[0] if resultado else ""
+    except Exception as e:
+        print("Error al buscar prestación:", e)
+        return ""
+    finally:
+        cur.close()
+        conn.close()
+
+def actualizar_descripcion_automatica():
+    # 1. Obtiene el código ingresado por el usuario en el widget
+    codigo = st.session_state.get("input_id_prestacion", "")
+    
+    # 2. Busca en la base de datos y actualiza el session_state de la descripción
+    if codigo:
+        desc = buscar_descripcion_prestacion(codigo)
+        st.session_state["input_nombre_prestacion"] = desc
+    else:
+        st.session_state["input_nombre_prestacion"] = ""
+
+def cargar_excel_arfsis_db(df):
+  """Recibe un DataFrame de Pandas y lo inserta masivamente en 'digitados_arfsis'."""
+  # Reemplazar NaNs por None (NULL en PostgreSQL)
+  df = df.where(pd.notna(df), None)
+
+  # Conexión a tu BD
+  conn = psycopg2.connect(
+      host="localhost",
+      database="tu_base_datos",  # <-- pon tu BD real
+      user="postgres",  # <-- pon tu usuario real
+      password="tu_password",  # <-- pon tu clave real
+      port="5432",
+  )
+  cursor = conn.cursor()
+
+  try:
+    # 1. Vaciar la tabla antes de cargar la lista actualizada
+    cursor.execute("TRUNCATE TABLE digitados_arfsis RESTART IDENTITY;")
+
+    insert_query = """
+            INSERT INTO digitados_arfsis (
+                numero_fua, establecimiento, numero_dni, ap_paterno, ap_materno,
+                primer_nombre, otros_nombres, fecha_nac, id_servicio, digitador, fecha_registro
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (numero_fua) DO UPDATE SET
+                digitador = EXCLUDED.digitador,
+                fecha_registro = EXCLUDED.fecha_registro;
+        """
+
+    datos_para_insertar = []
+    for _, row in df.iterrows():
+      # Formatear fechas correctamente si vienen como texto o Timestamp
+      f_nac = (
+          pd.to_datetime(row.get("fecha_nacimiento"), dayfirst=True, errors="coerce")
+          if row.get("fecha_nacimiento")
+          else None
+      )
+      f_reg = (
+          pd.to_datetime(row.get("fecha_registro"), dayfirst=True, errors="coerce")
+          if row.get("fecha_registro")
+          else None
+      )
+
+      datos_para_insertar.append((
+          (
+              str(row.get("numero_fua", "")).strip()
+              if row.get("numero_fua")
+              else None
+          ),
+          row.get("establecimiento"),
+          (
+              str(row.get("numero_dni", "")).strip()
+              if row.get("numero_dni")
+              else None
+          ),
+          row.get("ap_paterno"),
+          row.get("ap_materno"),
+          row.get("primer_nombre"),
+          row.get("otros_nombres"),
+          f_nac.date() if pd.notna(f_nac) else None,
+          str(row.get("ID Servicio", "")),
+          row.get("digitador"),
+          f_reg.date() if pd.notna(f_reg) else None,
+      ))
+
+    cursor.executemany(insert_query, datos_para_insertar)
+    conn.commit()
+    return True, f"Se cargaron exitosamente {len(datos_para_insertar)} registros."
+
+  except Exception as e:
+    conn.rollback()
+    return False, f"Error en la base de datos: {e}"
+  finally:
+    cursor.close()
+    conn.close()
+
+def obtener_fuar_guardados(engine):
+  # Consulta los registros de la tabla en PostgreSQL
+  query = "SELECT * FROM digitados_arfsis ORDER BY 1 DESC"
+  return pd.read_sql(query, con=engine)
+
+# ==========================================
+# 2. CONTROL DE SESIÓN Y NAVEGACIÓN
+# ==========================================
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+
+if "menu_activo" not in st.session_state:
+    st.session_state["menu_activo"] = "Dashboard"
+
+# ==========================================
+# 3. INTERFAZ GRÁFICA (UI)
+# ==========================================
+if st.session_state["user"] is None:
+    # --- PANTALLA DE LOGIN ATRACTIVA ---
+
+    # Creamos un diseño centrado usando columnas
+    _, col_centro, _ = st.columns([1, 1.2, 1])
+
+    with col_centro:
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Encabezado institucional / visual
+        st.markdown(
+            """
+            <div style="text-align: center; padding: 10px;">
+                <span style="font-size: 45px;">🏥</span>
+                <h2 style="color: #0E4194; margin-bottom: 0px;">SISTEMA DE CONTROL DE FUAS OBSERVADAS</h2>
+                <p style="color: #555; font-size: 14px; margin-top: 5px;">Sistema de Monitoreo y Corrección de Registros</p>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
+        # Tarjeta contenedora del Formulario
+        with st.container(border=True):
+            st.markdown("### 🔐 Acceso al Sistema")
+
+            with st.form("login_form"):
+                username_input = st.text_input("Usuario", placeholder="Ingrese su usuario")
+                password_input = st.text_input("Contraseña", type="password", placeholder="Ingrese su contraseña")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                submit_button = st.form_submit_button("Ingresar al Sistema", use_container_width=True)
+
+                if submit_button:
+                    if not username_input or not password_input:
+                        st.warning("⚠️ Por favor completa todos los campos.")
+                    else:
+                        user_data = validar_login(username_input, password_input)
+                        if user_data:
+                            st.session_state["user"] = user_data
+                            st.session_state["menu_activo"] = "Dashboard"
+                            st.success(f"¡Bienvenido/a, {user_data['nombre']}!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Usuario o contraseña incorrectos.")
+
+        st.markdown(
+            """
+            <div style="text-align: center; color: #888; font-size: 12px; margin-top: 20px;">
+                © 2026 • Módulo de Control FUAs MR. Combapata • Desarrollado por Joel Ch. F.
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
+else:
+    # --- PANEL PRINCIPAL TRAS LOGUEARSE ---
+    user = st.session_state["user"]
+    
+    # Extraemos el nombre de la sesión (probando las llaves más comunes)
+    nombre_usuario = (
+        user.get("nombre") or 
+        user.get("nombres") or 
+        user.get("nombre_completo") or 
+        user.get("username") or 
+        "JOEL CHURAPA FLORES"
+    )
+    
+    es_admin_user = user.get("es_admin", False)
+    user_rol = user.get("rol", "Administrador" if es_admin_user else "Digitador")
+
+    # --- SECCIÓN DE APARIENCIA / SELECTOR DE TEMAS ---
+    st.sidebar.markdown("""
+        <div style="
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            color: #888;
+            margin-top: 10px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        ">
+            Apariencia
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Definimos los temas con sus colores dinámicos completos (incluyendo fondos generales y gráficos)
+    temas_disponibles = {
+        "🌙 Modo Oscuro": {
+            "bg_app": "#0e1117",            # Fondo general oscuro profundo
+            "bg_sidebar": "#161b22",        # Elevación limpia para la barra lateral
+            "text_main": "#e6edf3",         # Texto claro de alta legibilidad
+            "text_sub": "#8b949e",          # Texto secundario/labels suaves
+            "bg_card": "rgba(22, 27, 34, 0.7)", # Tarjetas sobrias con transparencia elegante
+            "border_card": "#30363d",       # Bordes finos estilo GitHub Dark
+            "accent": "#2f81f7",            # Azul de acento institucional/tecnológico
+            "hover_bg": "rgba(56, 139, 253, 0.15)",
+            "hover_border": "#58a6ff",
+            "input_bg": "#0d1117"
+        },
+        "🏥 Tema MINSA (Institucional)": {
+            "bg_app": "#071b26",          # Azul marino institucional profundo
+            "text_main": "#e0f2f1",        # Texto claro con un toque sutil verde agua
+            "bg_card": "rgba(0, 150, 136, 0.12)",      # Tarjetas con sutil traslucidez verde médica/turquesa
+            "border_card": "rgba(0, 150, 136, 0.35)",  # Bordes definidos en tono turquesa MINSA
+            "hover_border": "#00bcd4",     # Borde celeste brillante al pasar el cursor
+            "hover_bg": "rgba(0, 150, 136, 0.22)"
+        },
+        "☀️ Modo Claro": {
+            "bg_app": "#e2d8d8",
+            "text_main": "#1a1d20",
+            "bg_card": "#f8f9fa",
+            "border_card": "#B9D8F8",
+            "hover_border": "#1976D2",
+            "hover_bg": "rgba(25, 118, 210, 0.08)",
+            "input_bg": "#cec7c7",          # Fondo blanco para los inputs
+            "input_text": "#000000"         # Texto oscuro legible en los inputs
+        }
+    }
+
+    # Selector desplegable en el sidebar
+    tema_seleccionado = st.sidebar.selectbox("Seleccionar Tema Visual", list(temas_disponibles.keys()), label_visibility="collapsed")
+    estilos = temas_disponibles[tema_seleccionado]
+
+    # --- TARJETA DE USUARIO DINÁMICA ---
+    st.markdown(f"""
+        <style>
+        /* 1. Variables raíz del sistema */
+        :root {{
+            --background-color: {estilos["bg_app"]};
+            --secondary-background-color: {estilos.get("bg_sidebar", estilos["bg_card"])};
+            --text-color: {estilos["text_main"]};
+            --accent-color: {estilos.get("accent", "#2f81f7")};
+        }}
+
+        /* 2. Fondo principal y tipografía general */
+        .stApp, body {{
+            background-color: {estilos["bg_app"]} !important;
+            color: {estilos["text_main"]} !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        }}
+
+        /* 3. Títulos y etiquetas de formulario */
+        h1, h2, h3, h4, h5, h6 {{
+            color: {estilos["text_main"]} !important;
+            font-weight: 600 !important;
+            letter-spacing: -0.3px !important;
+        }}
+        
+        label, [data-testid="stMetricLabel"] {{
+            color: {estilos.get("text_sub", "#8b949e")} !important;
+            font-size: 0.85rem !important;
+            font-weight: 500 !important;
+        }}
+
+        /* 4. Entradas de datos (Inputs, Selectbox, Calendar) */
+        input, textarea, 
+        div[data-baseweb="select"] > div, 
+        div[data-baseweb="base-input"],
+        div[data-baseweb="input"],
+        div[data-baseweb="calendar"] {{
+            background-color: {estilos.get("input_bg", "#0d1117")} !important;
+            color: {estilos["text_main"]} !important;
+            border: 1px solid {estilos["border_card"]} !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease-in-out !important;
+        }}
+
+        /* Efecto de foco en inputs */
+        div[data-baseweb="input"]:focus-within, 
+        div[data-baseweb="select"]:focus-within > div {{
+            border-color: {estilos.get("accent", "#2f81f7")} !important;
+            box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.2) !important;
+        }}
+
+        /* 5. Tablas y DataFrames estilizados para Modo Oscuro */
+        [data-testid="stDataFrame"], [data-testid="stTable"], .stDataFrame {{
+            background-color: {estilos.get("input_bg", "#0d1117")} !important;
+            border-radius: 8px !important;
+            border: 1px solid {estilos["border_card"]} !important;
+            padding: 4px !important;
+        }}
+
+        /* 6. Sidebar (Barra Lateral) */
+        [data-testid="stSidebar"] {{
+            background-color: {estilos.get("bg_sidebar", estilos["bg_card"])} !important;
+            border-right: 1px solid {estilos["border_card"]} !important;
+        }}
+        
+        /* Botones de navegación en el Sidebar */
+        [data-testid="stSidebar"] .stButton > button {{
+            background-color: {estilos["bg_card"]} !important;
+            color: {estilos["text_main"]} !important;
+            border: 1px solid {estilos["border_card"]} !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
+            width: 100% !important;
+            border-radius: 8px !important;
+            padding: 10px 14px !important;
+            font-weight: 500 !important;
+            display: flex !important;
+            align-items: center !important;
+            transition: all 0.2s ease !important;
+        }}
+        
+        /* Asegurar la alineación interna de los textos y contenedores del botón */
+        [data-testid="stSidebar"] .stButton > button div,
+        [data-testid="stSidebar"] .stButton > button p {{
+            text-align: left !important;
+            justify-content: flex-start !important;
+            width: 100% !important;
+            color: {estilos["text_main"]} !important;
+        }}
+
+        /* Efecto al pasar el cursor (Hover) */
+        [data-testid="stSidebar"] .stButton > button:hover {{
+            background-color: {estilos.get("hover_bg", "rgba(255,255,255,0.08)")} !important;
+            border-color: {estilos.get("hover_border", "#58a6ff")} !important;
+            color: {estilos.get("hover_border", "#58a6ff")} !important;
+        }}
+
+        /* 7. Botones principales de acción */
+        .stButton > button {{
+            border-radius: 6px !important;
+            border: 1px solid {estilos["border_card"]} !important;
+            background-color: {estilos.get("accent", "#2f81f7")} !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            padding: 6px 16px !important;
+            transition: all 0.2s ease !important;
+        }}
+        
+        .stButton > button:hover {{
+            opacity: 0.9 !important;
+            transform: translateY(-1px);
+        }}
+
+        /* 8. Ocultar marcas de agua y headers innecesarios */
+        #MainMenu {{visibility: hidden;}}
+        footer {{visibility: hidden;}}
+        [data-testid="stToolbar"] button[kind="header"],
+        button[title*="Deploy"], [data-testid="baseButton-header"] {{
+            display: none !important;
+        }}
+        </style>
+    """, unsafe_allow_html=True)
+
+
+
+
+    # Obtenemos el nombre del usuario desde el diccionario (si no existe, usa un valor por defecto)
+    nombre_usuario = user.get("nombre", "Usuario")
+
+    # Menú Lateral estilo Botones por Secciones
+
+    if st.sidebar.button("📊 Dashboard", width="stretch"):
+        st.session_state["menu_activo"] = "Dashboard"
+
+
+    # --- MENÚ DE ADMINISTRACIÓN (SOLO PARA ADMINS) ---
+    if es_admin_user:
+        st.sidebar.markdown("**ADMINISTRACIÓN**")
+
+        if st.sidebar.button("👥 Registrar Usuario", width="stretch"):
+            st.session_state["menu_activo"] = "Registrar Usuario"
+
+        if st.sidebar.button("✏️ Gestionar Usuarios", width="stretch"):
+            st.session_state["menu_activo"] = "Gestionar Usuarios"
+
+        if st.sidebar.button("🏥 Establecimientos", width="stretch"):
+            st.session_state["menu_activo"] = "Establecimientos"
+
+        if st.sidebar.button("👨‍⚕️ Profesionales", width="stretch"):
+            st.session_state["menu_activo"] = "Profesionales"
+
+        if st.sidebar.button("📤 Cargar ARFSIS-Web", width="stretch"):
+            st.session_state["menu_activo"] = "Cargar ARFSIS-Web"
+
+        if st.sidebar.button("💾 Backup", width="stretch"):
+            st.session_state["menu_activo"] = "Backup"
+            
+
+
+    # --- MENÚ DE REGISTRO Y CONTROL (VISIBLE PARA TODOS) ---
+    st.sidebar.markdown("**REGISTRO Y CONTROL**")
+    if st.sidebar.button("📝 Registrar FUA", width="stretch"):
+        st.session_state["menu_activo"] = "Registrar FUA"
+
+    if st.sidebar.button("📋 Bandeja de Control", width="stretch"):
+        st.session_state["menu_activo"] = "Bandeja de Control"
+
+    if st.sidebar.button("📊 Sincronizacion ARFSIS-Web", width="stretch"):
+                st.session_state["menu_activo"] = "Sincronizacion ARFSIS-Web"
+
+    if st.sidebar.button("🪪 Afiliados", width="stretch"):
+                st.session_state["menu_activo"] = "Afiliados"
+
+
+    # --- MENÚ DE REPORTES ---
+    st.sidebar.markdown("**REPORTES**")
+    if st.sidebar.button("📊 Reportes y Estadísticas", width="stretch"):
+        st.session_state["menu_activo"] = "Reportes y Estadísticas"
+
+
+    # --- CERRAR SESIÓN ---
+    if st.sidebar.button("🚪 Cerrar Sesión", width="stretch"):
+        st.session_state["user"] = None
+        st.rerun()
+
+
+    # ---------------------------------------------------------
+    # RENDERIZADO DE LAS VISTAS SEGÚN EL BOTÓN CLICKEADO
+    # ---------------------------------------------------------
+    vista_actual = st.session_state.get("menu_activo", "Dashboard") 
+
+
+    if vista_actual == "Dashboard":
+        render_dashboard()
+
+
+    if vista_actual == "Registrar Usuario" and es_admin_user:
+        st.subheader("👥 Registrar Nuevo Usuario")
+        with st.form("form_nuevo_usuario", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                nuevo_dni = st.text_input("DNI (Clave Principal)", max_chars=15)
+                nuevo_username = st.text_input("Nombre de Usuario (Login)")
+            with col2:
+                nuevo_nombre = st.text_input("Nombres y Apellidos Completos")
+                nuevo_password = st.text_input("Contraseña temporal", type="password")
+
+            tipo_rol = st.selectbox(
+                "Tipo de Rol en el Sistema",
+                options=["Digitador", "Auditora", "Administrador"],
+                index=0
+            )
+
+            btn_crear = st.form_submit_button("Registrar Usuario")
+            if btn_crear:
+                if not nuevo_dni or not nuevo_username or not nuevo_password or not nuevo_nombre:
+                    st.warning("Por favor completa todos los campos obligatorios.")
+                else:
+                    exito, mensaje = registrar_nuevo_usuario(
+                        nuevo_dni, nuevo_username, nuevo_password, nuevo_nombre, tipo_rol
+                    )
+                    if exito:
+                        st.success(mensaje)
+                        st.rerun()
+                    else:
+                        st.error(mensaje)
+
+    elif vista_actual == "Gestionar Usuarios" and es_admin_user:
+        st.subheader("✏️ Lista de Usuarios ")
+        usuarios_db = obtener_usuarios()
+        if usuarios_db:
+            df_usuarios = pd.DataFrame(usuarios_db, columns=["DNI", "Usuario", "Nombre Completo", "Rol", "Activo", "Creado En"])
+            df_visual = df_usuarios.copy()
+            df_visual["Activo"] = df_visual["Activo"].apply(lambda x: "Activo ✅" if x else "Inactivo ❌")
+            st.dataframe(df_visual, use_container_width=True)
+
+            st.divider()
+            st.markdown("### ⚙️ Modificar o Eliminar un Usuario")
+            lista_dnis = df_usuarios["DNI"].tolist()
+            dni_seleccionado = st.selectbox("Seleccione el DNI del usuario a gestionar:", options=lista_dnis)
+
+            if dni_seleccionado:
+                user_row = df_usuarios[df_usuarios["DNI"] == dni_seleccionado].iloc[0]
+                with st.form("form_editar_usuario"):
+                    edit_dni = st.text_input("DNI (No modificable)", value=str(user_row["DNI"]), disabled=True)
+                    edit_username = st.text_input("Nombre de Usuario", value=str(user_row["Usuario"]))
+                    edit_nombre = st.text_input("Nombre Completo", value=str(user_row["Nombre Completo"]))
+
+                    roles_opts = ["Digitador", "Auditora", "Administrador"]
+                    rol_actual = str(user_row["Rol"])
+                    idx_rol = roles_opts.index(rol_actual) if rol_actual in roles_opts else 0
+
+                    edit_rol = st.selectbox("Tipo de Rol", options=roles_opts, index=idx_rol)
+                    edit_activo = st.checkbox("Usuario Activo", value=bool(user_row["Activo"]))
+                    edit_password = st.text_input("Nueva contraseña (Opcional)", type="password")
+
+                    col_btn1, col_btn2 = st.columns(2)
+                    with col_btn1:
+                        btn_actualizar = st.form_submit_button("💾 Guardar Cambios")
+                    with col_btn2:
+                        btn_eliminar = st.form_submit_button("🗑️ Eliminar Usuario")
+
+                    if btn_actualizar:
+                        ok, msg = actualizar_usuario(dni_seleccionado, edit_username, edit_nombre, edit_rol, edit_activo, edit_password)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    if btn_eliminar:
+                        if dni_seleccionado == user["dni"]:
+                            st.error("No puedes eliminar tu propio usuario activo.")
+                        else:
+                            ok, msg = eliminar_usuario(dni_seleccionado)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+        else:
+            st.info("No hay usuarios registrados.")
+
+    elif vista_actual == "Establecimientos" and es_admin_user:
+        st.subheader("🏥 Gestión de Establecimientos de Salud")
+        st.markdown("---")
+
+        # Pestañas para organizar la creación y la gestión
+        tab_lista, tab_nuevo = st.tabs(["📋 Lista de Establecimientos", "➕ Registrar Nuevo Establecimiento"])
+
+        with tab_nuevo:
+            st.markdown("### Registrar Nuevo Establecimiento")
+            with st.form("form_nuevo_establecimiento", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    input_renaes = st.text_input("Código RENAES", max_chars=20, placeholder="Ej. 00001234")
+                with col2:
+                    input_nom_est = st.text_input("Nombre del Establecimiento", placeholder="Ej. P.S. San Juan de Dios")
+
+                btn_guardar_est = st.form_submit_button("Guardar Establecimiento", type="primary")
+                if btn_guardar_est:
+                    if not input_renaes.strip() or not input_nom_est.strip():
+                        st.warning("⚠️ Todos los campos son obligatorios.")
+                    else:
+                        ok, msg = registrar_establecimiento(input_renaes, input_nom_est)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+        with tab_lista:
+            st.markdown("### Establecimientos Registrados en la Red")
+            estab_db = obtener_todos_establecimientos()
+
+            if estab_db:
+                df_estab = pd.DataFrame(estab_db, columns=["ID", "Código RENAES", "Nombre del Establecimiento", "Activo"])
+                df_estab_visual = df_estab.copy()
+                df_estab_visual["Activo"] = df_estab_visual["Activo"].apply(lambda x: "Activo ✅" if x else "Inactivo ❌")
+
+                st.dataframe(df_estab_visual, use_container_width=True)
+
+                st.divider()
+                st.markdown("### ⚙️ Modificar Establecimiento")
+
+                lista_nombres_est = [f"ID: {row['ID']} | {row['Nombre del Establecimiento']} (RENAES: {row['Código RENAES']})" for _, row in df_estab.iterrows()]
+                est_seleccionado_str = st.selectbox("Seleccione un establecimiento para editar:", options=lista_nombres_est)
+
+                if est_seleccionado_str:
+                    id_est_sel = int(est_seleccionado_str.split("|")[0].replace("ID:", "").strip())
+                    row_est = df_estab[df_estab["ID"] == id_est_sel].iloc[0]
+
+                    with st.form("form_editar_establecimiento"):
+                        edit_renaes = st.text_input("Código RENAES", value=str(row_est["Código RENAES"]))
+                        edit_nombre = st.text_input("Nombre del Establecimiento", value=str(row_est["Nombre del Establecimiento"]))
+                        edit_activo = st.checkbox("Establecimiento Activo", value=bool(row_est["Activo"]))
+
+                        btn_actualizar_est = st.form_submit_button("💾 Actualizar Establecimiento", type="primary")
+                        if btn_actualizar_est:
+                            ok, msg = actualizar_establecimiento(id_est_sel, edit_renaes, edit_nombre, edit_activo)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+            else:
+                st.info("No hay establecimientos registrados en el sistema.")
+
+    elif vista_actual == "Registrar FUA":
+        st.subheader("📝 Gestión de FUAs Observadas")
+        st.markdown("---")
+
+        # Reemplazamos la vista plana por dos pestañas principales
+        tab_registro, tab_actualizar = st.tabs(["➕ Registrar Nueva FUA", "✏️ Actualizar FUA Observada"])
+
+        # =========================================================================
+        # PESTAÑA 1: REGISTRAR NUEVA FUA (TU CÓDIGO ACTUAL)
+        # =========================================================================
+        with tab_registro:
+            # ------------------------------------
+            # DEFINIR MODAL DE ÉXITO (VENTANA FLOTANTE)
+            # ------------------------------------
+            @st.dialog("¡Registro Exitoso! 🎉")
+            def mostrar_modal_exito(nro_fua):
+                st.success(f"La FUA N° **{nro_fua}** ha sido registrada correctamente.")
+                st.write("Haz clic en Aceptar para limpiar el formulario y registrar otra FUA.")
+                
+                if st.button("Aceptar", use_container_width=True, type="primary"):
+                    # Limpiamos las variables de estado para vaciar los campos
+                    st.session_state["paciente_encontrado"] = None
+                    st.session_state["dni_búsqueda_input"] = ""
+                    st.session_state["input_nombre"] = ""
+                    st.session_state["input_appaterno"] = ""
+                    st.session_state["input_apmaterno"] = ""
+                    st.session_state["input_num_fua"] = ""
+                    st.session_state["input_tipo_obs"] = ""
+                    st.session_state["input_det_obs"] = ""
+                    st.rerun()
+
+
+            # ------------------------------------
+            # INICIALIZAR ESTADOS DE LOS INPUTS
+            # ------------------------------------
+            if "paciente_encontrado" not in st.session_state:
+                st.session_state["paciente_encontrado"] = None
+
+            # ------------------------------------
+            # BLOQUE 1: BÚSQUEDA Y AUTOCOMPLETADO
+            # ------------------------------------
+            st.markdown("#### 1. Datos del Paciente / Afiliado")
+
+            col_dni_search, col_btn_search = st.columns([3, 1])
+            with col_dni_search:
+                dni_input = st.text_input("DNI del Paciente", max_chars=15, key="dni_búsqueda_input")
+            
+            
+            with col_btn_search:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🔍 Buscar DNI", use_container_width=True):
+                    if dni_input.strip():
+                        res = buscar_afiliado_por_dni(dni_input.strip())
+                        if res:
+                            st.session_state["paciente_encontrado"] = res
+
+                            # Asignamos los textos a las keys directamente
+                            st.session_state["input_nombre"] = res[1] if res[1] else ""
+                            st.session_state["input_appaterno"] = res[2] if res[2] else ""
+                            st.session_state["input_apmaterno"] = res[3] if res[3] else ""
+
+                            # Convertimos y asignamos la fecha directamente a la key del date_input
+                            f_nac_raw = res[4] if len(res) > 4 else None
+                            if f_nac_raw:
+                                import pandas as pd
+
+                                fecha_conv = pd.to_datetime(f_nac_raw, errors="coerce")
+                                if not pd.isna(fecha_conv):
+                                    st.session_state["input_fnac"] = fecha_conv.date()
+                                else:
+                                    st.session_state["input_fnac"] = None
+                            else:
+                                st.session_state["input_fnac"] = None
+
+                            st.success("¡Paciente encontrado en el padrón!")
+                        else:
+                            st.session_state["paciente_encontrado"] = "NO_ENCONTRADO"
+                            st.session_state["input_nombre"] = ""
+                            st.session_state["input_appaterno"] = ""
+                            st.session_state["input_apmaterno"] = ""
+                            st.session_state["paciente_fnac_temp"] = None
+                            st.warning("DNI no encontrado. Ingrese los datos manualmente.")
+
+            # Valores por defecto para los inputs basados en la búsqueda
+            paciente_dni = dni_input
+            paciente_nombre = ""
+            paciente_appaterno = ""
+            paciente_apmaterno = ""
+            paciente_fnac = None
+
+            if isinstance(st.session_state.get("paciente_encontrado"), tuple):
+                datos_p = st.session_state["paciente_encontrado"]
+                st.session_state["val_nombre"] = datos_p[1] if datos_p[1] else ""
+                st.session_state["val_appaterno"] = datos_p[2] if datos_p[2] else ""
+                st.session_state["val_apmaterno"] = datos_p[3] if datos_p[3] else ""
+                paciente_fnac = datos_p[4] if datos_p[4] else None
+            elif st.session_state.get("paciente_encontrado") == "NO_ENCONTRADO":
+                paciente_fnac = None
+                st.session_state["val_nombre"] = ""
+                st.session_state["val_appaterno"] = ""
+                st.session_state["val_apmaterno"] = ""
+            else:
+                paciente_fnac = None
+            if "val_nombre" not in st.session_state:
+                st.session_state["val_nombre"] = ""
+                st.session_state["val_appaterno"] = ""
+                st.session_state["val_apmaterno"] = ""
+
+            # 2. Renderizamos las columnas y los inputs usando el parámetro 'value=' de forma segura
+            col_nom, col_appat, col_apmat, col_fnac = st.columns(4)
+
+            with col_nom:
+                input_nombre = st.text_input("Nombres", key="input_nombre")
+            with col_appat:
+                input_appaterno = st.text_input("Apellido Paterno", key="input_appaterno")
+            with col_apmat:
+                input_apmaterno = st.text_input("Apellido Materno", key="input_apmaterno")
+
+            with col_fnac:
+                import datetime
+                import pandas as pd
+
+                min_f_nac = datetime.date(1900, 1, 1)
+                max_f_nac = datetime.date.today()
+
+                # Recuperamos la fecha guardada en la sesión al buscar
+                p_fnac = st.session_state.get("paciente_fnac_temp")
+                valor_fecha_inicial = None
+                if p_fnac:
+                    fecha_convertida = pd.to_datetime(p_fnac, errors="coerce")
+                    if not pd.isna(fecha_convertida):
+                        valor_fecha_inicial = fecha_convertida.date()
+
+                input_fnac = st.date_input(
+                    "Fecha de Nacimiento",
+                    value=valor_fecha_inicial,
+                    min_value=min_f_nac,
+                    max_value=max_f_nac,
+                    format="DD/MM/YYYY",
+                    key="input_fnac",
+                )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            st.markdown("#### 2. Datos de la Atención y FUA")
+
+            lista_est = obtener_lista_establecimientos()
+            lista_prof = obtener_lista_profesionales()
+
+            dict_est = {f"{nom}": id_est for id_est, nom in lista_est} if lista_est else {"Sin establecimientos registrados": None}
+            dict_prof = {f"{nom} ({esp}) - DNI: {dni}": dni for dni, nom, esp in lista_prof} if lista_prof else {"Sin profesionales registrados": ""}
+
+            # Fila 1: Número de FUA, Cód. Prestación y Fecha de Atención
+            col_fua, col_cod_prest, col_fecha = st.columns([2, 1, 1])
+            with col_fua:
+                input_num_fua = st.text_input("Nº de FUA (Ej. 001-00012345)", max_chars=30, key="input_num_fua")
+            with col_cod_prest:
+                # Añadimos on_change para que dispare la búsqueda al presionar Enter o salir del campo
+                input_id_prestacion = st.text_input(
+                    "Cód. Prestación", 
+                    placeholder="Ej. 056, 011", 
+                    max_chars=20, 
+                    key="input_id_prestacion",
+                    on_change=actualizar_descripcion_automatica
+                )
+            with col_fecha:
+                input_fecha_atencion = st.date_input(
+                    "Fecha de Atención",
+                    value=None,
+                    format="DD/MM/YYYY"
+                )
+
+            # Fila 2: Descripción Completa de la Prestación 
+            # (Se alimenta automáticamente de su propio key manejado por el callback)
+            input_nombre_prestacion = st.text_input(
+                "Descripción de la Prestación", 
+                placeholder="Ej. Consulta externa por medicina general, Control prenatal, etc.", 
+                key="input_nombre_prestacion"
+            )
+
+            # Fila 3: Establecimiento y Profesional
+            col_est, col_prof = st.columns(2)
+            with col_est:
+                select_est = st.selectbox("Establecimiento de Salud", options=list(dict_est.keys()))
+            with col_prof:
+                select_prof = st.selectbox("Profesional de Salud Atendiente", options=list(dict_prof.keys()))
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("#### 3. Detalle de la Observación")
+
+            col_cod_obs, col_det_obs = st.columns([1, 2])
+            with col_cod_obs:
+                input_tipo_obs = st.text_input("Tipo / Código de Observación", placeholder="Ej. OBS-01, DNI Inválido", key="input_tipo_obs")
+            with col_det_obs:
+                input_det_obs = st.text_area("Detalle / Sustento de la Observación", placeholder="Escriba la descripción exacta de la observación...", height=100, key="input_det_obs")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 Registrar FUA Observada", use_container_width=True, type="primary"):
+                nro_fua_clean = input_num_fua.strip()
+                
+                # 1. Validaciones previas de campos obligatorios
+                if not nro_fua_clean:
+                    st.error("⚠️ El número de FUA es obligatorio.")
+                elif not input_nombre.strip() or not input_appaterno.strip():
+                    st.error("⚠️ Los nombres y el apellido paterno del paciente son obligatorios.")
+                else:
+                    # 2. Verificación previa de existencia para asegurar que el Nº de FUA sea único
+                    fua_existente = buscar_fua_por_numero(nro_fua_clean)
+                    if fua_existente:
+                        st.warning(f"⚠️ La FUA N° **{nro_fua_clean}** ya se encuentra registrada en el sistema. Ingrese un número de FUA distinto.")
+                    else:
+                        id_est_sel = dict_est.get(select_est)
+                        prof_dni_sel = dict_prof.get(select_prof)
+
+                        datos_fua = {
+                            "numero_fua": nro_fua_clean,
+                            "id_prestacion": input_id_prestacion.strip(),
+                            "nombre_prestacion": input_nombre_prestacion.strip(),
+                            "establecimiento_id": id_est_sel,
+                            "afiliado_dni": str(paciente_dni).strip(),
+                            "afiliado_nombre": input_nombre.strip(),
+                            "afiliado_appaterno": input_appaterno.strip(),
+                            "afiliado_apmaterno": input_apmaterno.strip(),
+                            "afiliado_fecha_nacimiento": input_fnac,
+                            "profesional_dni": str(prof_dni_sel).strip() if prof_dni_sel else None,
+                            "digitador_dni": user["dni"],
+                            "tipo_observacion": input_tipo_obs.strip(),
+                            "detalle_observacion": input_det_obs.strip(),
+                            "fecha_atencion_fua": input_fecha_atencion
+                        }
+
+                        exito, msg = registrar_fua_observada(datos_fua)
+                        if exito:
+                            mostrar_modal_exito(nro_fua_clean)
+
+        # =========================================================================
+        # PESTAÑA 2: ACTUALIZAR FUAS OBSERVADAS (NUEVA PESTAÑA)
+        # =========================================================================
+        with tab_actualizar:
+            st.markdown("#### 🔍 Búsqueda de FUA para Edición/Actualización")
+
+            if "fua_encontrada_actualizar" not in st.session_state:
+                st.session_state["fua_encontrada_actualizar"] = None
+
+            col_search_fua, col_btn_fua = st.columns([3, 1])
+            with col_search_fua:
+                num_fua_edit = st.text_input("Ingrese Nº de FUA a Buscar", key="input_fua_search_edit")
+            with col_btn_fua:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🔎 Buscar FUA", use_container_width=True, key="btn_buscar_fua_edit"):
+                    if num_fua_edit.strip():
+                        fua_data = buscar_fua_por_numero(num_fua_edit.strip())
+                        if fua_data:
+                            st.session_state["fua_encontrada_actualizar"] = fua_data
+                            st.success("¡FUA encontrada correctamente!")
+                        else:
+                            st.session_state["fua_encontrada_actualizar"] = None
+                            st.warning("No se encontró ninguna FUA registrada con ese número.")
+                    else:
+                        st.info("Ingrese un número de FUA válido.")
+
+            # Si se encontró la FUA en la BD, desplegamos todos los campos para su edición
+            if st.session_state["fua_encontrada_actualizar"]:
+                fua = st.session_state["fua_encontrada_actualizar"]
+                st.markdown("---")
+                st.markdown("### ✏️ Edición Completa de FUA Observada")
+
+                # ------------------------------------
+                # BLOQUE 1: DATOS DEL PACIENTE / AFILIADO
+                # ------------------------------------
+                st.markdown("#### 1. Datos del Paciente / Afiliado")
+                u_paciente_dni = st.text_input("DNI del Paciente", value=fua.get("afiliado_dni") or "", max_chars=15, key="u_paciente_dni")
+
+                col_u_nom, col_u_appat, col_u_apmat, col_u_fnac = st.columns(4)
+                with col_u_nom:
+                    u_input_nombre = st.text_input("Nombres", value=fua.get("afiliado_nombre") or "", key="u_input_nombre")
+                with col_u_appat:
+                    u_input_appaterno = st.text_input("Apellido Paterno", value=fua.get("afiliado_appaterno") or "", key="u_input_appaterno")
+                with col_u_apmat:
+                    u_input_apmaterno = st.text_input("Apellido Materno", value=fua.get("afiliado_apmaterno") or "", key="u_input_apmaterno")
+                with col_u_fnac:
+                    val_fnac = fua.get("afiliado_fecha_nacimiento")
+                    u_input_fnac = st.date_input("Fecha de Nacimiento", value=val_fnac if val_fnac else None, key="u_input_fnac")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                # ------------------------------------
+                # BLOQUE 2: DATOS DE LA ATENCIÓN Y FUA
+                # ------------------------------------
+                st.markdown("#### 2. Datos de la Atención y FUA")
+
+                lista_est_u = obtener_lista_establecimientos()
+                lista_prof_u = obtener_lista_profesionales()
+
+                dict_est_u = {f"{nom}": id_est for id_est, nom in lista_est_u} if lista_est_u else {"Sin establecimientos registrados": None}
+                dict_prof_u = {f"{nom} ({esp}) - DNI: {dni}": dni for dni, nom, esp in lista_prof_u} if lista_prof_u else {"Sin profesionales registrados": ""}
+
+                # Fila 1: Nº de FUA, Cód. Prestación y Fecha de Atención
+                col_u_fua, col_u_cod_prest, col_u_fecha = st.columns([2, 1, 1])
+                with col_u_fua:
+                    u_input_num_fua = st.text_input("Nº de FUA", value=fua.get("numero_fua") or "", max_chars=30, key="u_input_num_fua")
+                with col_u_cod_prest:
+                    u_input_id_prestacion = st.text_input("Cód. Prestación", value=fua.get("id_prestacion") or "", max_chars=20, key="u_input_id_prestacion")
+                with col_u_fecha:
+                    val_fatencion = fua.get("fecha_atencion_fua")
+                    u_input_fecha_atencion = st.date_input("Fecha de Atención", value=val_fatencion if val_fatencion else None, key="u_input_fecha_atencion")
+
+                # Fila 2: Descripción de la Prestación
+                u_input_nombre_prestacion = st.text_input("Descripción de la Prestación", value=fua.get("nombre_prestacion") or "", key="u_input_nombre_prestacion")
+
+                # Fila 3: Establecimiento y Profesional (¡Estos faltaban!)
+                col_u_est, col_u_prof = st.columns(2)
+                with col_u_est:
+                    u_select_est = st.selectbox("Establecimiento de Salud", options=list(dict_est_u.keys()), key="u_select_est")
+                with col_u_prof:
+                    u_select_prof = st.selectbox("Profesional de Salud Atendiente", options=list(dict_prof_u.keys()), key="u_select_prof")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                # ------------------------------------
+                # BLOQUE 3: DETALLE DE LA OBSERVACIÓN
+                # ------------------------------------
+                st.markdown("#### 3. Detalle de la Observación")
+
+                col_u_cod_obs, col_u_det_obs = st.columns([1, 2])
+                with col_u_cod_obs:
+                    u_input_tipo_obs = st.text_input("Tipo / Código de Observación", value=fua.get("tipo_observacion") or "", key="u_input_tipo_obs")
+                with col_u_det_obs:
+                    u_input_det_obs = st.text_area("Detalle / Sustento de la Observación", value=fua.get("detalle_observacion") or "", height=100, key="u_input_det_obs")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🔄 Actualizar Datos de FUA", use_container_width=True, type="primary", key="btn_actualizar_fua_completa"):
+                    if not u_input_num_fua.strip():
+                        st.error("⚠️ El número de FUA es obligatorio.")
+                    elif not u_input_nombre.strip() or not u_input_appaterno.strip():
+                        st.error("⚠️ Los nombres y el apellido paterno del paciente son obligatorios.")
+                    else:
+                        # Obtenemos los diccionarios actualizados de establecimientos y profesionales
+                        lista_est_u = obtener_lista_establecimientos()
+                        lista_prof_u = obtener_lista_profesionales()
+                        dict_est_u = {f"{nom}": id_est for id_est, nom in lista_est_u} if lista_est_u else {}
+                        dict_prof_u = {f"{nom} ({esp}) - DNI: {dni}": dni for dni, nom, esp in lista_prof_u} if lista_prof_u else {}
+
+                        # Leemos de forma segura los valores seleccionados usando las claves (keys) de los selectbox
+                        est_seleccionado_texto = st.session_state.get("u_select_est")
+                        prof_seleccionado_texto = st.session_state.get("u_select_prof")
+
+                        id_est_upd = dict_est_u.get(est_seleccionado_texto)
+                        prof_dni_upd = dict_prof_u.get(prof_seleccionado_texto)
+
+                        datos_actualizar = {
+                            "id": fua["id"],
+                            "numero_fua": u_input_num_fua.strip(),
+                            "id_prestacion": u_input_id_prestacion.strip(),
+                            "nombre_prestacion": u_input_nombre_prestacion.strip(),
+                            "establecimiento_id": id_est_upd,
+                            "afiliado_dni": str(u_paciente_dni).strip(),
+                            "afiliado_nombre": u_input_nombre.strip(),
+                            "afiliado_appaterno": u_input_appaterno.strip(),
+                            "afiliado_apmaterno": u_input_apmaterno.strip(),
+                            "afiliado_fecha_nacimiento": u_input_fnac,
+                            "profesional_dni": str(prof_dni_upd).strip() if prof_dni_upd else None,
+                            "tipo_observacion": u_input_tipo_obs.strip(),
+                            "detalle_observacion": u_input_det_obs.strip(),
+                            "fecha_atencion_fua": u_input_fecha_atencion
+                        }
+
+                        exito_upd, msg_upd = actualizar_fua_observada(datos_actualizar)
+                        if exito_upd:
+                            st.success("¡Los datos de la FUA han sido actualizados correctamente! 🎉")
+                            st.session_state["fua_encontrada_actualizar"] = None
+                            st.rerun()
+                        else:
+                            st.error(f"Error al actualizar la FUA: {msg_upd}")
+
+    elif vista_actual == "Bandeja de Control":
+        st.subheader("📥 Bandeja de Control de FUAs Observadas")
+        st.markdown("---")
+
+        # --- FILTROS ---
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            filtro_estado = st.selectbox("Filtrar por Estado", options=["Todos", "Pendiente", "Corregido"])
+        with col_f2:
+            filtro_fua = st.text_input("Buscar por Nº FUA", placeholder="Ej. 451236")
+
+        fuas_db = obtener_fuas_observadas()
+
+        if fuas_db:
+            df_fuas = pd.DataFrame(fuas_db, columns=[
+                "ID", "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente",
+                "Profesional", "Tipo Observación", "Fecha Atención", "Estado", 
+                "Fecha Registro", "Fecha Corrección", "Digitador DNI"
+            ])
+
+            col_f3, col_f4 = st.columns(2)
+            
+            with col_f3:
+                lista_digitadores = ["Todos"] + sorted(df_fuas["Digitador DNI"].dropna().unique().tolist())
+                filtro_digitador = st.selectbox("Filtrar por Digitador DNI", options=lista_digitadores)
+
+            with col_f4:
+                df_fuas["Fecha_Reg_Solo"] = pd.to_datetime(df_fuas["Fecha Registro"]).dt.date
+                min_f = df_fuas["Fecha_Reg_Solo"].min()
+                max_f = df_fuas["Fecha_Reg_Solo"].max()
+                
+                if pd.notna(min_f) and pd.notna(max_f):
+                    rango_fechas = st.date_input(
+                        "Filtrar por Rango de Fecha de Registro", 
+                        value=(min_f, max_f),
+                        format="DD/MM/YYYY"
+                    )
+                else:
+                    rango_fechas = None
+
+            st.markdown("---")
+
+            # --- APLICAR FILTROS AL DATAFRAME ---
+            if filtro_estado != "Todos":
+                df_fuas = df_fuas[df_fuas["Estado"] == filtro_estado]
+
+            if filtro_fua.strip():
+                df_fuas = df_fuas[
+                    df_fuas["Nº FUA"].astype(str).str.contains(filtro_fua.strip(), case=False, na=False)
+                ]
+
+            if filtro_digitador != "Todos":
+                df_fuas = df_fuas[df_fuas["Digitador DNI"] == filtro_digitador]
+
+            if rango_fechas and isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
+                f_inicio, f_fin = rango_fechas
+                df_fuas = df_fuas[
+                    (df_fuas["Fecha_Reg_Solo"] >= f_inicio) & 
+                    (df_fuas["Fecha_Reg_Solo"] <= f_fin)
+                ]
+
+            if not df_fuas.empty:
+                # --- CÁLCULO DE ANTIGÜEDAD DESDE LA FECHA DE ATENCIÓN ---
+                hoy = pd.Timestamp.now().normalize().date()
+                
+                # Convertimos la Fecha Atención a tipo fecha para asegurar el cálculo correcto
+                df_fuas["Fecha_Atencion_Solo"] = pd.to_datetime(df_fuas["Fecha Atención"]).dt.date
+                
+                def calcular_antiguedad(row):
+                    # Comparamos estrictamente contra la fecha de atención
+                    if pd.notna(row["Fecha_Atencion_Solo"]):
+                        delta = (hoy - row["Fecha_Atencion_Solo"]).days
+                        return max(delta, 0) # Evita negativos por desfases
+                    return 0 
+
+                df_fuas["Días Pendiente"] = df_fuas.apply(calcular_antiguedad, axis=1)
+
+                # --- CONTADOR Y BOTÓN DE EXPORTACIÓN A EXCEL ---
+                col_info, col_btn = st.columns([3, 1])
+                with col_info:
+                    st.markdown(f"Mostrando **{len(df_fuas)}** registros encontrados.")
+                
+                with col_btn:
+                    import io
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        # Limpiamos las columnas auxiliares de fecha temporal antes de exportar
+                        df_fuas.drop(columns=["Fecha_Reg_Solo", "Fecha_Atencion_Solo"], errors="ignore").to_excel(writer, index=False, sheet_name="FUAs_Filtradas")
+                    processed_data = output.getvalue()
+                    
+                    st.download_button(
+                        label="📥 Exportar a Excel",
+                        data=processed_data,
+                        file_name="fuas_observadas_filtradas.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+
+                # --- FUNCIÓN DE ESTILOS VISUALES ---
+                def resaltar_filas(row):
+                    styles = [""] * len(row)
+                    estado = row["Estado"]
+                    dias = row.get("Días Pendiente", 0)
+                    
+                    # Índice de las columnas para aplicar estilos específicos
+                    idx_estado = row.index.get_loc("Estado")
+                    idx_dias = row.index.get_loc("Días Pendiente") if "Días Pendiente" in row.index else None
+                    
+                    if estado == "Pendiente":
+                        if dias > 7:
+                            # Alerta crítica (> 7 días): Rojo intenso solo en texto
+                            styles[idx_estado] = "color: #E74C3C; font-weight: bold;"
+                            if idx_dias is not None:
+                                styles[idx_dias] = "color: #E74C3C; font-weight: bold;"
+                        else:
+                            # Pendiente normal: Rojo más claro solo en texto
+                            styles[idx_estado] = "color: #C0392B; font-weight: bold;"
+                            if idx_dias is not None:
+                                styles[idx_dias] = "color: #C0392B; font-weight: bold;"
+                    elif estado == "Corregido":
+                        # Corregido: Verde solo en texto
+                        styles[idx_estado] = "color: #2ECC71; font-weight: bold;"
+                        if idx_dias is not None:
+                            styles[idx_dias] = "color: #2ECC71;"
+                            
+                    return styles
+
+                # Preparamos las columnas a mostrar (incluyendo "Días Pendiente")
+                df_visual = df_fuas[[
+                    "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente", 
+                    "Profesional", "Tipo Observación", "Fecha Atención", "Estado", "Días Pendiente", "Fecha Registro", "Fecha Corrección"
+                ]].copy()
+
+                # Aplicamos el estilo por filas o celdas con Styler
+                df_styled = df_visual.style.apply(resaltar_filas, axis=1)
+                st.dataframe(df_styled, use_container_width=True)
+
+                st.divider()
+                st.markdown("### ⚙️ Gestionar / Cambiar Estado de FUA")
+
+                lista_fua_opciones = [f"ID: {row['ID']} | FUA: {row['Nº FUA']} | Paciente: {row['Paciente']}" for _, row in df_fuas.iterrows()]
+                fua_seleccionada_str = st.selectbox("Seleccione una FUA para gestionar:", options=lista_fua_opciones)
+
+                if fua_seleccionada_str:
+                    id_seleccionado = int(fua_seleccionada_str.split("|")[0].replace("ID:", "").strip())
+                    row_actual = df_fuas[df_fuas["ID"] == id_seleccionado].iloc[0]
+
+                    st.info(f"**FUA Seleccionada:** {row_actual['Nº FUA']} | **Paciente:** {row_actual['Paciente']} | **Estado Actual:** {row_actual['Estado']} | **Antigüedad:** {row_actual['Días Pendiente']} días")
+
+                    col_b1, col_b2 = st.columns(2)
+
+                    with col_b1:
+                        st.markdown('<div class="btn-verde-custom">', unsafe_allow_html=True)
+                        if st.button("✅ Marcar como Corregido", use_container_width=True):
+                            ok, msg = actualizar_estado_fua(id_seleccionado, "Corregido")
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                            
+                    with col_b2:
+                        st.markdown('<div class="btn-rojo-custom">', unsafe_allow_html=True)
+                        if st.button("⌛ Marcar como Pendiente", use_container_width=True):
+                            ok, msg = actualizar_estado_fua(id_seleccionado, "Pendiente")
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                    # INYECTAR ESTILOS AQUÍ ABAJO (para que tengan prioridad sobre el estilo global)
+                    st.markdown("""
+                    <style>
+                        div.btn-verde-custom button {
+                            background-color: #28a745 !important;
+                            border-color: #28a745 !important;
+                            color: #ffffff !important;
+                        }
+                        div.btn-verde-custom button:hover {
+                            background-color: #218838 !important;
+                            border-color: #1e7e34 !important;
+                        }
+
+                        div.btn-rojo-custom button {
+                            background-color: #dc3545 !important;
+                            border-color: #dc3545 !important;
+                            color: #ffffff !important;
+                        }
+                        div.btn-rojo-custom button:hover {
+                            background-color: #c82333 !important;
+                            border-color: #bd2130 !important;
+                        }
+                    </style>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("No hay registros que coincidan con los filtros aplicados.")
+        else:
+            # Si la base de datos está totalmente vacía
+            df_fuas = pd.DataFrame(columns=[
+                "ID", "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente",
+                "Profesional", "Tipo Observación", "Fecha Atención", "Estado", 
+                "Fecha Registro", "Fecha Corrección", "Digitador DNI", "Fecha_Reg_Solo"
+            ])
+            st.info("Aún no hay FUAs observadas registradas en el sistema.")
+    
+
+    elif st.session_state.get("menu_activo") == "Profesionales" and es_admin_user:
+        st.subheader("👨‍⚕️ Gestión de Profesionales de Salud")
+        st.markdown("---")
+
+        tab_lista_prof, tab_nuevo_prof = st.tabs(["📋 Lista de Profesionales", "➕ Registrar Nuevo Profesional"])
+
+        # Cargar lista de establecimientos activos para asignarlos al profesional
+        lista_est = obtener_lista_establecimientos()
+        dict_est_options = {est[1]: est[0] for est in lista_est} if lista_est else {}
+
+        with tab_nuevo_prof:
+            st.markdown("### Registrar Nuevo Profesional")
+            with st.form("form_nuevo_profesional", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    input_dni_prof = st.text_input("DNI del Profesional", max_chars=15, placeholder="Ej. 12345678")
+                    input_esp_prof = st.text_input("Profesión u Especialidad", placeholder="Ej. Médico General / Enfermera")
+                with col2:
+                    input_nom_prof = st.text_input("Nombres y Apellidos", placeholder="Ej. Juan Pérez Gómez")
+                    if dict_est_options:
+                        nombre_est_sel = st.selectbox("Establecimiento Asignado", options=list(dict_est_options.keys()))
+                    else:
+                        st.warning("Debe registrar establecimientos activos primero.")
+                        nombre_est_sel = None
+
+                btn_guardar_prof = st.form_submit_button("Guardar Profesional", type="primary")
+                if btn_guardar_prof:
+                    if not input_dni_prof.strip() or not input_nom_prof.strip() or not input_esp_prof.strip() or not nombre_est_sel:
+                        st.warning("⚠️ Todos los campos son obligatorios.")
+                    else:
+                        est_id_fk = dict_est_options[nombre_est_sel]
+                        ok, msg = registrar_profesional(input_dni_prof, input_nom_prof, input_esp_prof, est_id_fk)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+        with tab_lista_prof:
+            st.markdown("### Profesionales Registrados en la Red")
+
+            # Consulta SQL para tu tabla de profesionales
+            query_profs = """
+                SELECT 
+                    p.dni AS "DNI",
+                    p.nombres_apellidos AS "Nombres y Apellidos",
+                    p.profesion_o_especialidad AS "Especialidad",
+                    COALESCE(e.nombre_establecimiento, p.establecimiento) AS "Establecimiento",
+                    p.activo AS "Activo",
+                    p.establecimiento AS "Establecimiento ID"
+                FROM profesionales p
+                LEFT JOIN establecimientos e ON (
+                    CASE 
+                        WHEN p.establecimiento ~ '^[0-9]+$' THEN p.establecimiento::integer 
+                        ELSE NULL 
+                    END = e.id
+                )
+                ORDER BY p.nombres_apellidos ASC;
+            """
+
+            try:
+                # Usamos pandas directamente con tu conexión de base de datos existente (ej. conn o engine)
+                # Si usas st.connection, asegúrate de que el secrets.toml tenga el bloque [connections.postgresql]
+                import pandas as pd
+
+                # Ejemplo usando tu función de conexión si ya la tienes en tu app:
+                conn = init_connection() # O la variable de conexión que uses globalmente
+                df_profs = pd.read_sql(query_profs, con=conn)
+                # (Si usas un gestor que cierra la conexión, recuerda cerrarla o usar with conn:)
+
+                if not df_profs.empty:
+                    df_profs_visual = df_profs[["DNI", "Nombres y Apellidos", "Especialidad", "Establecimiento", "Activo"]].copy()
+                    df_profs_visual["Activo"] = df_profs_visual["Activo"].apply(lambda x: "Activo ✅" if x else "Inactivo ❌")
+
+                    st.dataframe(df_profs_visual, width="stretch", hide_index=True)
+
+                    st.divider()
+                    st.markdown("### ⚙️ Modificar Profesional")
+
+                    lista_prof_opciones = [f"DNI: {row['DNI']} | {row['Nombres y Apellidos']} ({row['Especialidad']})" for _, row in df_profs.iterrows()]
+                    prof_seleccionado_str = st.selectbox("Seleccione un profesional para editar:", options=lista_prof_opciones)
+
+                    if prof_seleccionado_str:
+                        dni_sel = prof_seleccionado_str.split("|")[0].replace("DNI:", "").strip()
+                        row_prof = df_profs[df_profs["DNI"] == dni_sel].iloc[0]
+
+                        with st.form("form_editar_profesional"):
+                            edit_dni = st.text_input("DNI (No editable)", value=str(row_prof["DNI"]), disabled=True)
+                            edit_nombres = st.text_input("Nombres y Apellidos", value=str(row_prof["Nombres y Apellidos"]))
+                            edit_esp = st.text_input("Profesión u Especialidad", value=str(row_prof["Especialidad"]))
+
+                            current_est_id = row_prof["Establecimiento ID"]
+                            default_est_idx = 0
+                            est_keys = list(dict_est_options.keys())
+                            for idx, key in enumerate(est_keys):
+                                if dict_est_options[key] == current_est_id:
+                                    default_est_idx = idx
+                                    break
+
+                            edit_est_nombre = st.selectbox("Establecimiento Asignado", options=est_keys, index=default_est_idx if est_keys else 0)
+                            edit_activo_prof = st.checkbox("Profesional Activo", value=bool(row_prof["Activo"]))
+
+                            btn_actualizar_prof = st.form_submit_button("💾 Actualizar Profesional", type="primary")
+                            if btn_actualizar_prof:
+                                if not edit_nombres.strip() or not edit_esp.strip() or not edit_est_nombre:
+                                    st.warning("⚠️ Complete todos los campos requeridos.")
+                                else:
+                                    nuevo_est_id = dict_est_options[edit_est_nombre]
+                                    ok, msg = actualizar_profesional(dni_sel, edit_nombres, edit_esp, nuevo_est_id, edit_activo_prof)
+                                    if ok:
+                                        st.success(msg)
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
+                else:
+                    st.info("No hay profesionales registrados en el sistema.")
+
+            except Exception as e:
+                st.error(f"Error al consultar la base de datos: {e}")
+
+    elif vista_actual == "Reportes y Estadísticas":
+        st.subheader("📊 Módulo de Reportes y Estadísticas")
+        st.markdown("---")
+        
+        # Obtener métricas generales directamente (sin el botón general arriba)
+        total, pendientes, corregidos = obtener_estadisticas_generales()
+        
+        # Tarjetas de métricas principales
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(label="📄 Total de FUAs Observadas", value=total if total is not None else 0)
+        with col2:
+            val_p = pendientes if pendientes is not None else 0
+            st.metric(label="⌛ Total Pendientes", value=val_p, delta=f"-{val_p}" if val_p > 0 else "0", delta_color="inverse")
+        with col3:
+            val_c = corregidos if corregidos is not None else 0
+            st.metric(label="✅ Total Corregidos", value=val_c, delta=f"+{val_c}" if val_c > 0 else "off", delta_color="off")
+            
+        st.divider()
+        
+        # --- DEFINICIÓN DE LAS 3 PESTAÑAS ---
+        tab_est, tab_prof, tab_filtro_excel = st.tabs([
+            "🏥 Reporte por Establecimiento", 
+            "👨‍⚕️ Reporte por Profesional", 
+            "📥 Filtros y Exportación Excel"
+        ])
+        
+        # ==========================================
+        # 1. CONTENIDO DE LA PESTAÑA 1
+        # ==========================================
+        with tab_est:
+            st.markdown("### Consolidado por Establecimiento de Salud")
+            datos_est = obtener_reporte_por_establecimiento()
+            
+            if datos_est:
+                df_reporte_est = pd.DataFrame(
+                    datos_est, 
+                    columns=["Establecimiento", "Pendientes", "Corregidos", "Total"]
+                )
+                st.dataframe(df_reporte_est, use_container_width=True)
+                
+                # --- BOTÓN DE EXPORTAR A EXCEL PARA ESTABLECIMIENTO ---
+                import io
+                output_est = io.BytesIO()
+                with pd.ExcelWriter(output_est, engine='openpyxl') as writer:
+                    df_reporte_est.to_excel(writer, index=False, sheet_name='Reporte_Establecimientos')
+                excel_est_bytes = output_est.getvalue()
+                
+                timestamp_est = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                
+                st.download_button(
+                    label="📥 Descargar Consolidado por Establecimiento (.xlsx)",
+                    data=excel_est_bytes,
+                    file_name=f"reporte_por_establecimiento_{timestamp_est}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="btn_download_est",
+                    use_container_width=True
+                )
+                
+                st.markdown("### 📈 Gráfico Comparativo por Establecimiento")
+                df_chart_est = df_reporte_est.set_index("Establecimiento")[["Pendientes", "Corregidos"]]
+                st.bar_chart(df_chart_est)
+            else:
+                st.info("No hay suficientes datos registrados por establecimiento.")
+                
+        # ==========================================
+        # 2. CONTENIDO DE LA PESTAÑA 2
+        # ==========================================
+        with tab_prof:
+            st.markdown("### Consolidado por Profesional Atendiente")
+            datos_prof = obtener_reporte_por_profesional()
+            
+            if datos_prof:
+                df_reporte_prof = pd.DataFrame(
+                    datos_prof, 
+                    columns=["Profesional", "Especialidad", "Establecimiento", "Pendientes", "Corregidos", "Total"]
+                )
+                st.dataframe(df_reporte_prof, use_container_width=True)
+                
+                # Botón de descarga exclusivo para esta pestaña
+                import io
+                output_prof = io.BytesIO()
+                with pd.ExcelWriter(output_prof, engine='openpyxl') as writer:
+                    df_reporte_prof.to_excel(writer, index=False, sheet_name='Reporte_Profesionales')
+                excel_prof_bytes = output_prof.getvalue()
+                
+                timestamp_prof = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                
+                st.download_button(
+                    label="📥 Descargar Consolidado por Profesional (.xlsx)",
+                    data=excel_prof_bytes,
+                    file_name=f"reporte_por_profesional_{timestamp_prof}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="btn_download_prof",
+                    use_container_width=True
+                )
+                
+                st.markdown("### 📊 Gráfico Comparativo por Profesional")
+                df_chart_prof = df_reporte_prof.set_index("Profesional")[["Pendientes", "Corregidos"]]
+                st.bar_chart(df_chart_prof)
+            else:
+                st.info("No hay suficientes datos registrados asociados a profesionales.")
+
+        # ==========================================
+        # 3. CONTENIDO DE LA PESTAÑA 3 (Filtros y Excel con Todos los Campos)
+        # ==========================================
+        with tab_filtro_excel:
+            st.markdown("### 🔍 Panel de Filtros y Reporte Detallado")
+            st.markdown("Filtra por rango de fechas, establecimiento(s), profesional(es) y estado para visualizar y descargar los registros:")
+            
+            # Consultar listas de la BD para los selectores múltiples
+            conn_tmp = init_connection()
+            cur_tmp = conn_tmp.cursor()
+            cur_tmp.execute("SELECT DISTINCT nombre_establecimiento FROM establecimientos WHERE nombre_establecimiento IS NOT NULL ORDER BY 1;")
+            lista_est_db = [row[0] for row in cur_tmp.fetchall()]
+            
+            cur_tmp.execute("SELECT DISTINCT nombres_apellidos FROM profesionales WHERE nombres_apellidos IS NOT NULL ORDER BY 1;")
+            lista_prof_db = [row[0] for row in cur_tmp.fetchall()]
+            
+            cur_tmp.execute("SELECT DISTINCT estado FROM fuas_observadas WHERE estado IS NOT NULL ORDER BY 1;")
+            lista_estados_db = [row[0] for row in cur_tmp.fetchall()]
+            
+            cur_tmp.close()
+            conn_tmp.close()
+
+            # Distribución de filtros en columnas para mayor orden
+            col_fx1, col_fx2 = st.columns(2)
+            with col_fx1:
+                rango_fechas_avanzado = st.date_input(
+                    "Rango de Fechas:",
+                    value=(datetime(2026, 1, 1), datetime.today()),
+                    format="DD/MM/YYYY",
+                    key="avanzado_fechas"
+                )
+            with col_fx2:
+                est_seleccionados = st.multiselect(
+                    "Establecimiento(s) (Vacío = Todos):",
+                    options=lista_est_db,
+                    key="avanzado_est"
+                )
+
+            col_fx3, col_fx4 = st.columns(2)
+            with col_fx3:
+                prof_seleccionados = st.multiselect(
+                    "Profesional(es) (Vacío = Todos):",
+                    options=lista_prof_db,
+                    key="avanzado_prof"
+                )
+            with col_fx4:
+                estados_seleccionados = st.multiselect(
+                    "Estado(s) (Vacío = Todos):",
+                    options=lista_estados_db,
+                    key="avanzado_estado"
+                )
+            
+            st.markdown("---")
+
+            # Inicializamos las variables de fecha de forma segura
+            f_inicio, f_fin = None, None
+
+            if isinstance(rango_fechas_avanzado, tuple):
+                if len(rango_fechas_avanzado) == 2:
+                    f_inicio, f_fin = rango_fechas_avanzado
+                elif len(rango_fechas_avanzado) == 1:
+                    f_inicio = rango_fechas_avanzado[0]
+                    f_fin = rango_fechas_avanzado[0]
+            elif rango_fechas_avanzado is not None:
+                f_inicio = rango_fechas_avanzado
+                f_fin = rango_fechas_avanzado
+
+            if f_inicio is not None and f_fin is not None:
+                if f_inicio > f_fin:
+                    f_inicio, f_fin = f_fin, f_inicio
+
+                # Consulta SQL optimizada sin f.id y con filtros dinámicos
+                conn_q = init_connection()
+                cur_q = conn_q.cursor()
+                try:
+                    query = """
+                        SELECT 
+                            f.numero_fua,
+                            COALESCE(e.nombre_establecimiento, 'Sin Establecimiento') AS establecimiento,
+                            f.afiliado_dni,
+                            f.afiliado_nombre,
+                            f.afiliado_appaterno,
+                            f.afiliado_apmaterno,
+                            f.afiliado_fecha_nacimiento,
+                            f.profesional_dni,
+                            COALESCE(p.nombres_apellidos, 'Sin Profesional Asignado') AS profesional_nombre,
+                            COALESCE(p.profesion_o_especialidad, 'N/A') AS profesional_especialidad,
+                            f.digitador_dni,
+                            f.tipo_observacion,
+                            f.detalle_observacion,
+                            f.fecha_atencion_fua,
+                            f.estado,
+                            f.fecha_registro,
+                            f.fecha_correccion
+                        FROM fuas_observadas f
+                        LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+                        LEFT JOIN profesionales p ON TRIM(f.profesional_dni::text) = TRIM(p.dni::text)
+                        WHERE f.fecha_registro::date >= %s AND f.fecha_registro::date <= %s
+                    """
+                    params = [f_inicio, f_fin]
+
+                    if est_seleccionados:
+                        query += " AND e.nombre_establecimiento = ANY(%s)"
+                        params.append(est_seleccionados)
+
+                    if prof_seleccionados:
+                        query += " AND COALESCE(NULLIF(p.nombres_apellidos, ''), NULLIF(CONCAT('DNI: ', f.profesional_dni), 'DNI: '), 'Sin Profesional Asignado') = ANY(%s)"
+                        params.append(prof_seleccionados)
+
+                    if estados_seleccionados:
+                        query += " AND f.estado = ANY(%s)"
+                        params.append(estados_seleccionados)
+
+                    query += " ORDER BY f.fecha_registro DESC;"
+
+                    cur_q.execute(query, params)
+                    datos_filtrados = cur_q.fetchall()
+                except Exception as e:
+                    st.error(f"Error en consulta: {e}")
+                    datos_filtrados = []
+                finally:
+                    cur_q.close()
+                    conn_q.close()
+
+                if datos_filtrados:
+                    df_filtrado = pd.DataFrame(
+                        datos_filtrados, 
+                        columns=[
+                            "Nro FUA", "Establecimiento", "Afiliado DNI", 
+                            "Afiliado Nombres", "Afiliado Ap. Paterno", "Afiliado Ap. Materno", 
+                            "Afiliado F. Nacimiento", "Profesional DNI", "Profesional Nombre", 
+                            "Profesional Especialidad", "Digitador DNI", "Tipo de Observación", 
+                            "Detalle Observación", "Fecha Atención FUA", "Estado", 
+                            "Fecha Registro", "Fecha Corrección"
+                        ]
+                    )
+                    
+                    st.markdown(f"**Registros encontrados:** `{len(df_filtrado)}`")
+                    st.dataframe(df_filtrado, use_container_width=True)
+                    
+                    # --- BOTÓN DE EXPORTAR A EXCEL PARA ESTA PESTAÑA ---
+                    import io
+                    output_filtro = io.BytesIO()
+                    with pd.ExcelWriter(output_filtro, engine='openpyxl') as writer:
+                        df_filtrado.to_excel(writer, index=False, sheet_name='Reporte_Filtrado')
+                    excel_bytes_filtro = output_filtro.getvalue()
+                    
+                    timestamp_filtro = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                    
+                    st.download_button(
+                        label="📥 Descargar Reporte Filtrado en Excel (.xlsx)",
+                        data=excel_bytes_filtro,
+                        file_name=f"reporte_filtrado_{timestamp_filtro}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_download_filtro_excel",
+                        use_container_width=True
+                    )
+                else:
+                    st.info("ℹ️ No se encontraron registros para los filtros y rango de fechas seleccionados.")
+            else:
+                st.warning("⚠️ Por favor selecciona el rango completo de fechas para generar el reporte.")
+
+    elif st.session_state.get("menu_activo") == "Backup":
+        st.subheader("💾 Backup de la Base de Datos")
+        st.markdown("---")
+        
+        # Pestañas internas para ordenar las acciones
+        tab_gen, tab_rest = st.tabs(["📦 Generar Backup", "📥 Restaurar Backup"])
+        
+        # --- PESTAÑA 1: GENERAR BACKUP ---
+        with tab_gen:
+            st.write("Genera una copia de seguridad completa en formato `.sql` de toda la base de datos de FUAs.")
+            
+            if st.button("🚀 Crear y Descargar Backup"):
+                # Verificar si pg_dump.exe realmente existe en esa ruta
+                if not os.path.exists(PG_DUMP_PATH):
+                    st.error(f"❌ No se encontró el archivo `pg_dump.exe` en la ruta: `{PG_DUMP_PATH}`. Por favor, verifica tu versión de PostgreSQL.")
+                else:
+                    try:
+                        fecha_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"backup_fuas_{fecha_str}.sql"
+                        filepath = os.path.join(os.getcwd(), filename)
+                        
+                        env_proceso = os.environ.copy()
+                        env_proceso['PGPASSWORD'] = DB_PASSWORD
+                        
+                        cmd = [
+                            PG_DUMP_PATH,
+                            "-h", "localhost",
+                            "-p", "5432",
+                            "-U", DB_USER,
+                            "-d", DB_NAME,
+                            "-F", "p",
+                            "-b",
+                            "-v",
+                            "-f", filepath
+                        ]
+                        
+                        subprocess.run(cmd, env=env_proceso, check=True)
+                        
+                        if os.path.exists(filepath):
+                            with open(filepath, "rb") as file:
+                                st.download_button(
+                                    label="⬇️ Descargar Archivo .sql",
+                                    data=file,
+                                    file_name=filename,
+                                    mime="text/plain"
+                                )
+                            st.success("¡Backup generado con éxito!")
+                        else:
+                            st.error("No se pudo generar el archivo de respaldo.")
+                            
+                    except Exception as e:
+                        st.error(f"Error al generar el backup: {e}")
+
+        # --- PESTAÑA 2: RESTAURAR BACKUP ---
+        with tab_rest:
+            st.warning("⚠️ **Atención:** Restaurar un respaldo sobrescribirá los datos actuales de la base de datos.")
+            
+            uploaded_backup = st.file_uploader("Selecciona tu archivo .sql", type=["sql"])
+            confirmar_restauracion = st.checkbox("Confirmo que deseo sobrescribir la base de datos")
+            
+            if st.button("🔄 Ejecutar Restauración"):
+                if uploaded_backup is not None and confirmar_restauracion:
+                    try:
+                        temp_filepath = os.path.join(os.getcwd(), "temp_restore.sql")
+                        with open(temp_filepath, "wb") as f:
+                            f.write(uploaded_backup.getbuffer())
+                        
+                        os.environ['PGPASSWORD'] = DB_PASSWORD
+                        
+                        cmd = f'"{PSQL_PATH}" -U {DB_USER} -d {DB_NAME} -f "{temp_filepath}"'
+                        subprocess.run(cmd, shell=True, check=True)
+                        
+                        if os.path.exists(temp_filepath):
+                            os.remove(temp_filepath)
+                            
+                        st.success("¡Base de datos restaurada correctamente! Recarga la página (F5).")
+                        
+                    except Exception as e:
+                        st.error(f"Error al restaurar: {e}")
+                else:
+                    if uploaded_backup is None:
+                        st.warning("Por favor, sube un archivo `.sql` válido.")
+                    if not confirmar_restauracion:
+                        st.warning("Debes marcar la casilla de confirmación.")
+
+    elif st.session_state.get("menu_activo") == "Afiliados":
+        st.subheader("🪪 Gestión del Padrón de Afiliados")
+        st.markdown("---")
+        
+        # Añadimos la pestaña de Exportar a las opciones existentes
+        tab_lista, tab_exportar, tab_importar = st.tabs([
+            "📋 Ver Lista", 
+            "📥 Exportar a Excel", 
+            "📤 Importar desde Excel / CSV"
+        ])
+        
+        import psycopg2
+        import io
+        
+        # --- PESTAÑA 1: VER LISTA ---
+        with tab_lista:
+            try:
+                conn = psycopg2.connect(
+                    host="localhost",
+                    database=DB_NAME,
+                    user=DB_USER,
+                    password=DB_PASSWORD,
+                    port="5432"
+                )
+                
+                st.markdown("##### 🔍 Filtros de Búsqueda Avanzada")
+                
+                # Dividimos la sección de filtros en columnas para mayor orden
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    filtro_dni = st.text_input("DNI:", placeholder="Ej. 4755...")
+                with col2:
+                    filtro_appat = st.text_input("Apellido Paterno:", placeholder="Ej. Ramirez")
+                with col3:
+                    filtro_apmat = st.text_input("Apellido Materno:", placeholder="Ej. Holguino")
+                with col4:
+                    filtro_nombre = st.text_input("Nombre:", placeholder="Ej. Yola")
+                
+                # Construir la consulta SQL de manera dinámica según los campos llenados
+                where_clauses = []
+                
+                if filtro_dni:
+                    where_clauses.append(f"CAST(dni AS TEXT) ILIKE '%{filtro_dni.strip()}%'")
+                if filtro_appat:
+                    where_clauses.append(f"appaterno ILIKE '%{filtro_appat.strip()}%'")
+                if filtro_apmat:
+                    where_clauses.append(f"apmaterno ILIKE '%{filtro_apmat.strip()}%'")
+                if filtro_nombre:
+                    where_clauses.append(f"nombre ILIKE '%{filtro_nombre.strip()}%'")
+                
+                # Armar la cláusula WHERE si hay filtros activos
+                condicion_sql = ""
+                if where_clauses:
+                    condicion_sql = "WHERE " + " AND ".join(where_clauses)
+                
+                query = f"""
+                    SELECT 
+                        numero AS "N°", 
+                        establecimiento AS "Establecimiento", 
+                        dni AS "DNI", 
+                        nombre AS "Nombre", 
+                        appaterno AS "Apellido Paterno", 
+                        apmaterno AS "Apellido Materno", 
+                        fecha_nacimiento AS "F. Nacimiento", 
+                        direccion AS "Dirección"
+                    FROM afiliados
+                    {condicion_sql}
+                    ORDER BY numero ASC
+                    LIMIT 100;
+                """
+                
+                df_afiliados = pd.read_sql(query, conn)
+                conn.close()
+                
+                if where_clauses:
+                    st.info(f"Mostrando resultados filtrados (máximo 100 en pantalla). Total histórico: **237,890**")
+                else:
+                    st.info(f"Mostrando los primeros 100 registros. Usa los filtros superiores para buscar a alguien específico. Total histórico: **237,890**")
+                
+                if not df_afiliados.empty:
+                    st.dataframe(df_afiliados, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("No se encontraron registros que coincidan con los filtros ingresados.")
+                    
+            except Exception as e:
+                st.error(f"Error al cargar afiliados: {e}")
+
+        # --- PESTAÑA 2: EXPORTAR A EXCEL ---
+        with tab_exportar:
+            st.write("Descarga una copia completa o filtrada de todos los afiliados registrados en la base de datos en formato Excel (`.xlsx`).")
+            
+            # Opciones de exportación
+            tipo_exportacion = st.radio(
+                "Selecciona el alcance de la exportación:",
+                ["Exportar TODOS los registros (237,890+)", "Exportar solo por Establecimiento específico"]
+            )
+            
+            establecimiento_filtro = ""
+            if "Establecimiento específico" in tipo_exportacion:
+                est_input = st.text_input("Ingresa el nombre del establecimiento (ej. C.S. YAURI):")
+                if est_input:
+                    establecimiento_filtro = est_input.strip()
+
+            if st.button("📊 Generar Archivo Excel para Descarga"):
+                try:
+                    with st.spinner("Consultando la base de datos y generando el Excel... Esto puede tomar unos segundos."):
+                        conn = psycopg2.connect(
+                            host="localhost",
+                            database=DB_NAME,
+                            user=DB_USER,
+                            password=DB_PASSWORD,
+                            port="5432"
+                        )
+                        
+                        if establecimiento_filtro:
+                            query_exp = f"""
+                                SELECT numero, establecimiento, dni, nombre, appaterno, apmaterno, fecha_nacimiento, direccion
+                                FROM afiliados
+                                WHERE establecimiento ILIKE '%{establecimiento_filtro}%'
+                                ORDER BY numero ASC;
+                            """
+                        else:
+                            query_exp = """
+                                SELECT numero, establecimiento, dni, nombre, appaterno, apmaterno, fecha_nacimiento, direccion
+                                FROM afiliados
+                                ORDER BY numero ASC;
+                            """
+                        
+                        df_export = pd.read_sql(query_exp, conn)
+                        conn.close()
+                        
+                        if not df_export.empty:
+                            # Crear el archivo Excel en memoria usando BytesIO
+                            output = io.BytesIO()
+                            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                                df_export.to_excel(writer, index=False, sheet_name='Afiliados')
+                            processed_data = output.getvalue()
+                            
+                            st.success(f"¡Se han preparado **{len(df_export)}** registros con éxito!")
+                            
+                            st.download_button(
+                                label="📥 Descargar Excel de Afiliados",
+                                data=processed_data,
+                                file_name="padron_afiliados_fua.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        else:
+                            st.warning("No se encontraron registros para exportar con los filtros seleccionados.")
+                            
+                except Exception as e:
+                    st.error(f"Error al generar la exportación: {e}")
+
+        # --- PESTAÑA 3: IMPORTAR DESDE EXCEL ---
+        with tab_importar:
+            st.warning("⚠️ **Aviso:** La importación procesará el archivo Excel y actualizará los registros en la base de datos.")
+            
+            archivo_subido = st.file_uploader("Sube tu archivo en formato Excel (.xlsx) o CSV", type=["xlsx", "csv"])
+            
+            modo_carga = st.radio(
+                "Selecciona el modo de actualización:",
+                ["Añadir / Actualizar registros", "⚠️ REEMPLAZAR TODO (Borra la tabla actual e ingresa los nuevos)"]
+            )
+            
+            if archivo_subido is not None:
+                if st.button("🚀 Procesar e Importar Datos"):
+                    try:
+                        with st.spinner("Leyendo archivo y actualizando la base de datos... Por favor espera."):
+                            if archivo_subido.name.endswith('.xlsx'):
+                                df_nuevo = pd.read_excel(archivo_subido)
+                            else:
+                                df_nuevo = pd.read_csv(archivo_subido)
+                            
+                            df_nuevo.columns = [col.strip().lower() for col in df_nuevo.columns]
+                            
+                            from sqlalchemy import create_engine
+                            engine = create_engine(f'postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@localhost:5432/{DB_NAME}')
+                            
+                            if "REEMPLAZAR TODO" in modo_carga:
+                                df_nuevo.to_sql('afiliados', engine, if_exists='replace', index=False)
+                                st.success(f"¡Tabla reemplazada con éxito! Se importaron {len(df_nuevo)} registros.")
+                            else:
+                                df_nuevo.to_sql('afiliados', engine, if_exists='append', index=False)
+                                st.success(f"¡Se agregaron {len(df_nuevo)} registros correctamente a la base de datos!")
+                                
+                    except Exception as e:
+                        st.error(f"Error durante la importación masiva: {e}")
+
+    if st.session_state.get("menu_activo") == "Cargar ARFSIS-Web":
+        st.title("📤 Cargar Base de FUAs Digitadas (ARFSIS-Web)")
+        st.caption("Carga el archivo Excel descargado del sistema del MINSA para acumular los registros en la base de datos.")
+
+        archivo_excel = st.file_uploader(
+            "Seleccione el archivo Excel (.xlsx, .xls)",
+            type=["xlsx", "xls"],
+            key="uploader_arfsis",
+        )
+
+        if archivo_excel is not None:
+            try:
+                # Leer el Excel únicamente al seleccionar el archivo
+                df_arfsis = pd.read_excel(archivo_excel)
+
+                st.success(f"📂 Archivo leído correctamente con {len(df_arfsis)} filas.")
+                st.dataframe(df_arfsis.head(5), use_container_width=True)
+
+                if st.button("🚀 Agregar a PostgreSQL", type="primary", use_container_width=True):
+                    with st.spinner("Verificando duplicados y añadiendo registros nuevos a 'digitados_arfsis'..."):
+                        db_host = st.secrets["postgres"]["host"]
+                        db_port = st.secrets["postgres"]["port"]
+                        db_name = st.secrets["postgres"]["database"]
+                        db_user = st.secrets["postgres"]["user"]
+                        db_pass = st.secrets["postgres"]["password"]
+
+                        ENGINE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+                        engine = create_engine(ENGINE_URL)
+
+                        # Convertir columnas de fecha si existen en el Excel
+                        if "fecha_nacimiento" in df_arfsis.columns:
+                            df_arfsis["fecha_nacimiento"] = pd.to_datetime(
+                                df_arfsis["fecha_nacimiento"], dayfirst=True, errors="coerce"
+                            )
+                        if "fecha_registro" in df_arfsis.columns:
+                            df_arfsis["fecha_registro"] = pd.to_datetime(
+                                df_arfsis["fecha_registro"], dayfirst=True, errors="coerce"
+                            )
+
+                        # 1. Eliminar duplicados dentro del propio archivo Excel subido
+                        if "numero_fua" in df_arfsis.columns:
+                            df_arfsis["numero_fua"] = df_arfsis["numero_fua"].astype(str).str.strip()
+                            df_arfsis = df_arfsis.drop_duplicates(subset=["numero_fua"])
+
+                            # 2. Consultar FUAs que ya existen en la base de datos
+                            df_existentes = pd.read_sql("SELECT numero_fua FROM digitados_arfsis", con=engine)
+
+                            if not df_existentes.empty:
+                                df_existentes["numero_fua"] = df_existentes["numero_fua"].astype(str).str.strip()
+                                # Filtrar solo las FUAs que NO estén en la base de datos
+                                df_nuevos = df_arfsis[~df_arfsis["numero_fua"].isin(df_existentes["numero_fua"])]
+                            else:
+                                df_nuevos = df_arfsis.copy()
+                        else:
+                            df_nuevos = df_arfsis.copy()
+
+                        # 3. Guardar en la base de datos solo si hay filas nuevas
+                        if not df_nuevos.empty:
+                            df_nuevos.to_sql(
+                                name="digitados_arfsis",
+                                con=engine,
+                                if_exists="append",
+                                index=False,
+                            )
+                            st.success(
+                                f"✅ ¡Éxito! Se agregaron {len(df_nuevos)} nuevos registros a la base de datos. "
+                                f"(Se ignoraron {len(df_arfsis) - len(df_nuevos)} registros que ya existían)."
+                            )
+                        else:
+                            st.info("ℹ️ No hay registros nuevos para agregar. Todos los FUAs de este archivo ya se encuentran registrados.")
+
+                        st.markdown("---")
+                        st.subheader(
+                            "📊 Registros Almacenados en la Base de Datos"
+                        )
+
+                        df_bd = pd.read_sql(
+                            "SELECT * FROM digitados_arfsis ORDER BY 1 DESC",
+                            con=engine,
+                        )
+
+                        if not df_bd.empty:
+                          st.info(
+                              "📌 **Total de registros guardados en la BD:**"
+                              f" {len(df_bd)} filas"
+                          )
+                          st.dataframe(
+                              df_bd, use_container_width=True, height=400
+                          )
+                        else:
+                          st.warning(
+                              "⚠️ Aún no hay registros guardados en la tabla"
+                              " 'digitados_arfsis'."
+                          )
+
+                        st.markdown("---")
+                        st.subheader("📊 Registros Almacenados en la Base de Datos")
+
+                        try:
+                            query = "SELECT * FROM digitados_arfsis ORDER BY fecha_registro DESC"
+                            df_bd = pd.read_sql(query, con=engine)
+
+                            if not df_bd.empty:
+                                st.info(
+                                    f"📌 **Total de registros guardados en la BD:** {len(df_bd)} filas"
+                            )
+                                st.dataframe(df_bd, use_container_width=True, height=400)
+                            else:
+                                st.warning(
+                                "⚠️ La tabla 'digitados_arfsis' está conectada, pero no tiene"
+                                " registros."
+                            )
+
+                        except Exception as db_err:
+                            st.error(f"❌ Error crítico en la BD: {db_err}")
+
+            except Exception as err:
+                st.error(f"Error al procesar el archivo: {err}")
+
+    if st.session_state.get("menu_activo") == "Sincronizacion ARFSIS-Web":
+        st.title("📊 Bandeja de Control y Conciliación de FUAs")
+        st.caption("Cruza automáticamente las FUAs observadas con el reporte oficial de ARFSIS-Web del MINSA.")
+
+        try:
+            # 1. Conexión a la base de datos usando st.secrets
+            db_host = st.secrets["postgres"]["host"]
+            db_port = st.secrets["postgres"]["port"]
+            db_name = st.secrets["postgres"]["database"]
+            db_user = st.secrets["postgres"]["user"]
+            db_pass = st.secrets["postgres"]["password"]
+
+            ENGINE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+            engine = create_engine(ENGINE_URL)
+
+            # 2. Consulta SQL con JOINs a establecimientos y usuarios
+            query_conciliacion = """
+                SELECT 
+                    f.id,
+                    f.numero_fua AS "Nº FUA",
+                    COALESCE(e.nombre_establecimiento, f.establecimiento_id::text, '-') AS "Establecimiento",
+                    f.afiliado_dni AS "DNI Paciente",
+                    TRIM(CONCAT(f.afiliado_nombre, ' ', f.afiliado_appaterno, ' ', f.afiliado_apmaterno)) AS "Paciente",
+                    f.estado AS "Estado Local",
+                    
+                    -- Estado en ARFSIS
+                    CASE 
+                        WHEN a.numero_fua IS NOT NULL THEN 'Digitado'
+                        ELSE 'Pendiente de Digitación'
+                    END AS "Estado en ARFSIS",
+                    
+                    -- Nombre del Digitador traído desde la tabla usuarios
+                    COALESCE(u.nombre_completo, a.digitador::text, '-') AS "Digitador",
+                    
+                    -- Fecha de registro en el MINSA
+                    COALESCE(TO_CHAR(a.fecha_registro, 'DD/MM/YYYY'), '-') AS "Fecha Digitación MINSA"
+
+                FROM fuas_observadas f
+                LEFT JOIN establecimientos e 
+                    ON f.establecimiento_id = e.id
+                LEFT JOIN digitados_arfsis a 
+                    ON TRIM(f.numero_fua::text) = TRIM(a.numero_fua::text)
+                LEFT JOIN usuarios u 
+                    ON TRIM(a.digitador::text) = TRIM(u.dni::text)
+                ORDER BY f.id DESC;
+            """
+
+            df_bandeja = pd.read_sql(query_conciliacion, con=engine)
+
+            if not df_bandeja.empty:
+                # 3. Métricas rápidas (KPIs)
+                total_fuas = len(df_bandeja)
+                digitadas = len(df_bandeja[df_bandeja["Estado en ARFSIS"] != "Pendiente de Digitación"])
+                pendientes = total_fuas - digitadas
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total Observadas", total_fuas)
+                col2.metric("Ya Digitadas (MINSA)", digitadas, delta=f"{digitadas}")
+                col3.metric("Pendientes", pendientes, delta=f"-{pendientes}", delta_color="inverse")
+
+                st.markdown("---")
+
+                # 4. Filtros interactivos en 3 columnas
+                col_f1, col_f2, col_f3 = st.columns(3)
+
+                with col_f1:
+                    filtro_estado = st.selectbox(
+                        "Filtrar por Estado:",
+                        ["Todas", "Solo Pendientes", "Solo Digitadas"]
+                    )
+
+                with col_f2:
+                    lista_eess = ["Todos"] + sorted(list(df_bandeja["Establecimiento"].unique()))
+                    filtro_eess = st.selectbox(
+                        "Filtrar por Establecimiento:",
+                        lista_eess
+                    )
+
+                with col_f3:
+                    lista_digitadores = ["Todos"] + sorted(list(df_bandeja["Digitador"].unique()))
+                    filtro_digitador = st.selectbox(
+                        "Filtrar por Digitador:",
+                        lista_digitadores
+                    )
+
+                # Aplicar la lógica de filtrado acumulativo
+                df_filtrado = df_bandeja.copy()
+
+                if filtro_estado == "Solo Pendientes":
+                    df_filtrado = df_filtrado[df_filtrado["Estado en ARFSIS"] == "Pendiente de Digitación"]
+                elif filtro_estado == "Solo Digitadas":
+                    df_filtrado = df_filtrado[df_filtrado["Estado en ARFSIS"] != "Pendiente de Digitación"]
+
+                if filtro_eess != "Todos":
+                    df_filtrado = df_filtrado[df_filtrado["Establecimiento"] == filtro_eess]
+
+                if filtro_digitador != "Todos":
+                    df_filtrado = df_filtrado[df_filtrado["Digitador"] == filtro_digitador]
+
+                # 5. Función de formato condicional (Rojo para Pendiente, Verde para Corregido o Digitado)
+                def estilizar_estado(val):
+                    if "Pendiente" in str(val):
+                        return "color: #E74C3C; font-weight: bold;"  # Rojo
+                    elif val in ["Corregido", "Digitado"]:
+                        return "color: #2ECC71; font-weight: bold;"  # Verde
+                    return ""
+
+                df_estilizado = df_filtrado.style.map(
+                    estilizar_estado, 
+                    subset=["Estado Local", "Estado en ARFSIS"]
+                )
+
+                # 6. Renderizar tabla en Streamlit
+                st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
+
+            else:
+                st.info("No se encontraron registros en la tabla 'fuas_observadas'.")
+
+        except Exception as err:
+            st.error(f"Error al conectar con la base de datos o realizar la conciliación: {err}")
+    
+    
+
+   
