@@ -10,6 +10,7 @@ import plotly.express as px
 import subprocess
 import numpy as np
 from sqlalchemy import create_engine
+import random
 
 
 # --- AQUÍ ARRIBA COLOCAS LAS CREDENCIALES Y RUTAS ---
@@ -376,30 +377,29 @@ def registrar_fua_observada(datos):
         conn.close()
 
 def obtener_fuas_observadas():
-    conn = init_connection()
+    conn = init_connection() # Asegúrate de obtener la conexión
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
+        cur.execute("""
             SELECT 
-                f.id, 
-                f.numero_fua, 
-                e.nombre_establecimiento AS establecimiento, 
-                f.afiliado_dni, 
-                CONCAT(f.afiliado_nombre, ' ', f.afiliado_appaterno, ' ', f.afiliado_apmaterno) AS paciente, 
-                p.nombres_apellidos AS profesional,  -- 👈 Usamos la columna exacta de tu tabla
-                f.tipo_observacion, 
-                f.fecha_atencion_fua, 
-                f.estado, 
+                f.id,
+                f.numero_fua,
+                e.nombre_establecimiento AS establecimiento,
+                f.afiliado_dni,
+                CONCAT(f.afiliado_nombre, ' ', f.afiliado_appaterno, ' ', f.afiliado_apmaterno) AS paciente,
+                p.nombres_apellidos AS profesional,
+                f.tipo_observacion,
+                f.fecha_atencion_fua,
+                f.estado,
                 f.fecha_registro,
                 f.fecha_correccion,
-                f.digitador_dni
+                f.digitador_dni,
+                f.id_prestacion
             FROM fuas_observadas f
             LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
             LEFT JOIN profesionales p ON f.profesional_dni = p.dni
             ORDER BY f.fecha_registro DESC;
-            """
-        )
+        """)
         return cur.fetchall()
     except Exception as e:
         st.error(f"Error al obtener la bandeja de FUAs: {e}")
@@ -408,30 +408,49 @@ def obtener_fuas_observadas():
         cur.close()
         conn.close()
 
-def actualizar_estado_fua(fua_id, nuevo_estado):
+def actualizar_estado_fua(fua_id, nuevo_estado, dni_usuario=None):
     conn = init_connection()
     cur = conn.cursor()
     try:
-        if nuevo_estado == "Corregido":
+        # 1. Obtener número de FUA y estado actual
+        cur.execute("SELECT numero_fua, estado FROM fuas_observadas WHERE id = %s;", (fua_id,))
+        resultado = cur.fetchone()
+        if not resultado:
+            return False, "No se encontró la FUA."
+        
+        numero_fua, estado_anterior = resultado
+
+        # 2. Actualizar estado y fecha de corrección
+        if nuevo_estado in ["Corregido", "Anulado"]:
             cur.execute(
                 """
                 UPDATE fuas_observadas 
-                SET estado = %s, fecha_correccion = NOW()
+                SET estado = %s, fecha_correccion = NOW(), digitador_dni = COALESCE(%s, digitador_dni)
                 WHERE id = %s;
                 """,
-                (nuevo_estado, fua_id)
+                (nuevo_estado, dni_usuario, fua_id)
             )
         else:
             cur.execute(
                 """
                 UPDATE fuas_observadas 
-                SET estado = %s, fecha_correccion = NULL
+                SET estado = %s, fecha_correccion = NULL, digitador_dni = COALESCE(%s, digitador_dni)
                 WHERE id = %s;
                 """,
-                (nuevo_estado, fua_id)
+                (nuevo_estado, dni_usuario, fua_id)
             )
+
+        # 3. Registrar en el historial guardando el DNI del usuario
+        cur.execute(
+            """
+            INSERT INTO fua_historial (fua_id, numero_fua, accion, estado_anterior, estado_nuevo, usuario_dni)
+            VALUES (%s, %s, %s, %s, %s, %s);
+            """,
+            (fua_id, numero_fua, f"Cambio a {nuevo_estado}", estado_anterior, nuevo_estado, dni_usuario)
+        )
+
         conn.commit()
-        return True, "¡Estado de la FUA actualizado correctamente!"
+        return True, "¡Estado actualizado y registrado en el historial correctamente!"
     except Exception as e:
         conn.rollback()
         return False, f"Error al actualizar: {e}"
@@ -1169,6 +1188,146 @@ def obtener_fuar_guardados(engine):
   query = "SELECT * FROM digitados_arfsis ORDER BY 1 DESC"
   return pd.read_sql(query, con=engine)
 
+def registrar_cargo_entrega(df_bloque_fuas, profesional, dni_prof, establecimiento, usuario_actual):
+    conn = init_connection()
+    cur = conn.cursor()
+    try:
+        # 1. Generar un código único correlativo
+        fecha_corta = datetime.now().strftime('%d%m%y')
+        aleatorio = random.randint(1000, 9999)
+        codigo_cargo = f"CARGO-{fecha_corta}-{aleatorio}"
+        
+        # 2. Insertar el encabezado del Cargo (Guarda el nombre del usuario actual)
+        query_cargo = """
+            INSERT INTO cargos_entrega (codigo_cargo, profesional_responsable, dni_profesional, establecimiento, total_fuas, usuario_registro)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id;
+        """
+        cur.execute(query_cargo, (codigo_cargo, profesional, dni_prof, establecimiento, len(df_bloque_fuas), usuario_actual))
+        cargo_id = cur.fetchone()[0]
+        
+        # 3. Vincular los IDs de este bloque al nuevo cargo
+        ids_fuas = [int(x) for x in df_bloque_fuas["ID"].tolist()]
+        query_update_fuas = """
+            UPDATE fuas_observadas
+            SET cargo_id = %s
+            WHERE id = ANY(%s);
+        """
+        cur.execute(query_update_fuas, (cargo_id, ids_fuas))
+        
+        # 4. Registrar movimiento en fua_historial para cada FUA del bloque
+        for fua_id in ids_fuas:
+            query_hist = """
+                INSERT INTO fua_historial (fua_id, accion, estado_anterior, estado_nuevo, usuario_dni)
+                VALUES (%s, %s, %s, %s, %s);
+            """
+            # Mantenemos 'Pendiente' o el estado actual que tenía la FUA según tu lógica
+            cur.execute(query_hist, (fua_id, f"Entregado en {codigo_cargo}", "Pendiente", "Entregado a Profesional", usuario_actual))
+            
+        conn.commit()
+        return cargo_id, codigo_cargo
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error al registrar el cargo: {e}")
+        return None, None
+    finally:
+        cur.close()
+        conn.close()
+
+def generar_html_cargo(codigo_cargo, profesional_recibe, establecimiento, df_bloque, usuario_actual):
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            /* 📄 Fondo blanco y texto oscuro fijo para que no dependa del modo oscuro */
+            body {{ 
+                font-family: Arial, sans-serif; 
+                margin: 0; 
+                padding: 20px; 
+                background-color: #ffffff; 
+                color: #000000; 
+            }}
+            .header {{ text-align: center; font-weight: bold; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 15px; background-color: #ffffff; }}
+            th, td {{ border: 1px solid black; padding: 6px; font-size: 12px; text-align: left; color: #000000; }}
+            th {{ background-color: #f2f2f2; text-align: center; color: #000000; }}
+            
+            /* 🖨️ ESTILOS PARA OCULTAR EL BOTÓN AL MOMENTO DE IMPRIMIR */
+            @media print {{
+                .no-print {{ display: none; }}
+            }}
+        </style>
+    </head>
+    <body>
+    
+        <!-- 🖨️ BOTÓN DE IMPRESIÓN RÁPIDA -->
+        <div class="no-print" style="text-align: right; margin-bottom: 15px;">
+            <button onclick="window.print()" style="background-color: #2e7d32; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold;">
+                🖨️ Imprimir Cargo
+            </button>
+        </div>
+
+        <!-- 📄 CONTENIDO DEL CARGO -->
+        <div class="header">
+            <h3>CARGO DE ENTREGA DE FUAS OBSERVADAS</h3>
+            <p>Nº: {codigo_cargo}</p>
+        </div>
+        
+        <p><b>Establecimiento:</b> {establecimiento}</p>
+        <p><b>Profesional Responsable / Recibe:</b> {profesional_recibe}</p>
+        <p><b>Fecha de Emisión:</b> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+        <p><b>Total de FUAs Observadas:</b> {len(df_bloque)}</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Nº</th>
+                    <th>Nº FUA</th>
+                    <th>Profesional</th>
+                    <th>Observación</th>
+                    <th>F. Atención</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    # Rellenamos las filas usando iterrows para capturar con precisión los datos
+    for idx, (index, row) in enumerate(df_bloque.iterrows(), 1):
+        html += f"""
+                <tr>
+                    <td style="text-align: center;">{idx}</td>
+                    <td>{row.get('Nº FUA', '-')}</td>
+                    <td>{row.get('Profesional', '-')}</td>
+                    <td>{row.get('Tipo Observación', '-')}</td>
+                    <td>{row.get('Fecha Atención', '-')}</td>
+                </tr>
+        """
+        
+    html += f"""
+            </tbody>
+        </table>
+
+        <div style="display: flex; justify-content: space-between; margin-top: 100px;">
+            <div style="width: 40%; text-align: center;">
+                <div style="border-top: 1px solid black; padding-top: 5px;">
+                    <b>Entregado Por:</b> {usuario_actual}<br>
+                    <span style="font-size: 11px;">Data Entry / Digitación</span>
+                </div>
+            </div>
+            <div style="width: 40%; text-align: center;">
+                <div style="border-top: 1px solid black; padding-top: 5px;">
+                    <b>Recibido Conforme:</b> {profesional_recibe}<br>
+                    <span style="font-size: 11px;">Firma y Sello del Profesional</span>
+                </div>
+            </div>
+        </div>
+
+    </body>
+    </html>
+    """
+    return html
 # ==========================================
 # 2. CONTROL DE SESIÓN Y NAVEGACIÓN
 # ==========================================
@@ -1250,6 +1409,44 @@ else:
     
     es_admin_user = user.get("es_admin", False)
     user_rol = user.get("rol", "Administrador" if es_admin_user else "Digitador")
+
+    # 👤 Mostrar el usuario activo y su rol dentro de un recuadro
+    user_info = st.session_state.get("user", {})
+    nombre_usuario = (
+        user_info.get("nombre_completo") or 
+        st.session_state.get("nombre_completo") or 
+        user_info.get("nombre") or 
+        "Digitador Activo"
+    )
+    
+    es_admin_user = user_info.get("es_admin", False)
+    user_rol = user_info.get("rol", "Administrador" if es_admin_user else "Digitador")
+
+    st.sidebar.markdown(f"""
+        <div style="
+            padding: 12px; 
+            border-radius: 8px; 
+            border: 1px solid rgba(150, 150, 150, 0.3); 
+            background-color: rgba(150, 150, 150, 0.08); 
+            margin-bottom: 15px;
+        ">
+            <div style="font-size: 11px; color: gray; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;">Usuario Activo</div>
+            <div style="font-size: 14px; font-weight: bold; margin-bottom: 6px;">👤 {nombre_usuario}</div>
+            <span style="
+                display: inline-block; 
+                padding: 2px 8px; 
+                background-color: #0066cc; 
+                color: white; 
+                border-radius: 4px; 
+                font-size: 11px; 
+                font-weight: bold;
+                letter-spacing: 0.5px;
+            ">
+                {user_rol.upper()}
+            </span>
+        </div>
+    """, unsafe_allow_html=True)
+    st.sidebar.markdown("---")
 
     # --- SECCIÓN DE APARIENCIA / SELECTOR DE TEMAS ---
     st.sidebar.markdown("""
@@ -1472,10 +1669,13 @@ else:
         st.session_state["menu_activo"] = "Bandeja de Control"
 
     if st.sidebar.button("📊 Sincronizacion ARFSIS-Web", width="stretch"):
-                st.session_state["menu_activo"] = "Sincronizacion ARFSIS-Web"
+        st.session_state["menu_activo"] = "Sincronizacion ARFSIS-Web"
 
     if st.sidebar.button("🪪 Afiliados", width="stretch"):
-                st.session_state["menu_activo"] = "Afiliados"
+        st.session_state["menu_activo"] = "Afiliados"
+
+    if st.sidebar.button("📦 Entregar Cargo", use_container_width=True):
+        st.session_state["menu_activo"] = "Entregar Cargo"
 
 
     # --- MENÚ DE REPORTES ---
@@ -1879,7 +2079,7 @@ else:
                             "digitador_dni": user["dni"],
                             "tipo_observacion": input_tipo_obs.strip(),
                             "detalle_observacion": input_det_obs.strip(),
-                            "fecha_atencion_fua": input_fecha_atencion
+                            "fecha_atencion_fua": input_fecha_atencion if input_fecha_atencion else None
                         }
 
                         exito, msg = registrar_fua_observada(datos_fua)
@@ -2031,7 +2231,7 @@ else:
         # --- FILTROS ---
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            filtro_estado = st.selectbox("Filtrar por Estado", options=["Todos", "Pendiente", "Corregido"])
+            filtro_estado = st.selectbox("Filtrar por Estado", options=["Todos", "Pendiente", "Corregido", "Anulado", "Extemporáneo"])
         with col_f2:
             filtro_fua = st.text_input("Buscar por Nº FUA", placeholder="Ej. 451236")
 
@@ -2039,10 +2239,10 @@ else:
 
         if fuas_db:
             df_fuas = pd.DataFrame(fuas_db, columns=[
-                "ID", "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente",
-                "Profesional", "Tipo Observación", "Fecha Atención", "Estado", 
-                "Fecha Registro", "Fecha Corrección", "Digitador DNI"
-            ])
+            "ID", "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente",
+            "Profesional", "Tipo Observación", "Fecha Atención", "Estado", 
+            "Fecha Registro", "Fecha Corrección", "Digitador DNI", "ID Prestación"
+        ])
 
             col_f3, col_f4 = st.columns(2)
             
@@ -2067,33 +2267,20 @@ else:
             st.markdown("---")
 
             # --- APLICAR FILTROS AL DATAFRAME ---
-            if filtro_estado != "Todos":
-                df_fuas = df_fuas[df_fuas["Estado"] == filtro_estado]
-
-            if filtro_fua.strip():
-                df_fuas = df_fuas[
-                    df_fuas["Nº FUA"].astype(str).str.contains(filtro_fua.strip(), case=False, na=False)
-                ]
-
-            if filtro_digitador != "Todos":
-                df_fuas = df_fuas[df_fuas["Digitador DNI"] == filtro_digitador]
-
-            if rango_fechas and isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
-                f_inicio, f_fin = rango_fechas
-                df_fuas = df_fuas[
-                    (df_fuas["Fecha_Reg_Solo"] >= f_inicio) & 
-                    (df_fuas["Fecha_Reg_Solo"] <= f_fin)
-                ]
-
             if not df_fuas.empty:
-                # --- CÁLCULO DE ANTIGÜEDAD DESDE LA FECHA DE ATENCIÓN ---
+                columnas_de_fecha = ["Fecha Registro", "Fecha Corrección", "Fecha Modificación", "Fecha Actualización"]
+
+                for col in columnas_de_fecha:
+                    if col in df_fuas.columns:
+                        df_fuas[col] = pd.to_datetime(df_fuas[col], errors='coerce').dt.strftime("%d-%m-%Y %H:%M:%S")
+                        df_fuas[col] = df_fuas[col].fillna("-")
+               
+               
+               # 1. --- CÁLCULO DE ANTIGÜEDAD Y CAMBIO DE ESTADO (PRIMERO) ---
                 hoy = pd.Timestamp.now().normalize().date()
-                
-                # Convertimos la Fecha Atención a tipo fecha para asegurar el cálculo correcto
                 df_fuas["Fecha_Atencion_Solo"] = pd.to_datetime(df_fuas["Fecha Atención"]).dt.date
                 
                 def calcular_antiguedad(row):
-                    # Comparamos estrictamente contra la fecha de atención
                     if pd.notna(row["Fecha_Atencion_Solo"]):
                         delta = (hoy - row["Fecha_Atencion_Solo"]).days
                         return max(delta, 0) # Evita negativos por desfases
@@ -2101,7 +2288,33 @@ else:
 
                 df_fuas["Días Pendiente"] = df_fuas.apply(calcular_antiguedad, axis=1)
 
-                # --- CONTADOR Y BOTÓN DE EXPORTACIÓN A EXCEL ---
+                # 📌 REGLA AUTOMÁTICA: Cambiar Estado a Extemporáneo si supera los 45 días
+                df_fuas.loc[(df_fuas["Días Pendiente"] > 45) & (df_fuas["Estado"] == "Pendiente"), "Estado"] = "Extemporáneo"
+
+
+                # 2. --- APLICAR FILTROS DE LA INTERFAZ (DESPUÉS del cálculo) ---
+                if filtro_estado != "Todos":
+                    df_fuas = df_fuas[df_fuas["Estado"] == filtro_estado]
+
+                if filtro_fua.strip():
+                    df_fuas = df_fuas[
+                        df_fuas["Nº FUA"].astype(str).str.contains(filtro_fua.strip(), case=False, na=False)
+                    ]
+
+                if filtro_digitador != "Todos":
+                    df_fuas = df_fuas[df_fuas["Digitador DNI"] == filtro_digitador]
+
+                if rango_fechas and isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
+                    f_inicio, f_fin = rango_fechas
+                    df_fuas = df_fuas[
+                        (df_fuas["Fecha_Reg_Solo"] >= f_inicio) & 
+                        (df_fuas["Fecha_Reg_Solo"] <= f_fin)
+                    ]
+
+                # 📌 --- GUARDAR EN SESIÓN PARA EL MÓDULO "ENTREGAR CARGO" ---
+                st.session_state["df_fuas"] = df_fuas
+
+                # 4. --- CONTADOR Y BOTÓN DE EXPORTACIÓN A EXCEL ---
                 col_info, col_btn = st.columns([3, 1])
                 with col_info:
                     st.markdown(f"Mostrando **{len(df_fuas)}** registros encontrados.")
@@ -2110,7 +2323,6 @@ else:
                     import io
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        # Limpiamos las columnas auxiliares de fecha temporal antes de exportar
                         df_fuas.drop(columns=["Fecha_Reg_Solo", "Fecha_Atencion_Solo"], errors="ignore").to_excel(writer, index=False, sheet_name="FUAs_Filtradas")
                     processed_data = output.getvalue()
                     
@@ -2128,103 +2340,210 @@ else:
                     estado = row["Estado"]
                     dias = row.get("Días Pendiente", 0)
                     
-                    # Índice de las columnas para aplicar estilos específicos
                     idx_estado = row.index.get_loc("Estado")
                     idx_dias = row.index.get_loc("Días Pendiente") if "Días Pendiente" in row.index else None
-                    
+
                     if estado == "Pendiente":
-                        if dias > 7:
-                            # Alerta crítica (> 7 días): Rojo intenso solo en texto
+                        if dias > 25:
                             styles[idx_estado] = "color: #E74C3C; font-weight: bold;"
                             if idx_dias is not None:
                                 styles[idx_dias] = "color: #E74C3C; font-weight: bold;"
                         else:
-                            # Pendiente normal: Rojo más claro solo en texto
-                            styles[idx_estado] = "color: #C0392B; font-weight: bold;"
+                            styles[idx_estado] = "color: #D4AC0D; font-weight: bold;"
                             if idx_dias is not None:
-                                styles[idx_dias] = "color: #C0392B; font-weight: bold;"
+                                styles[idx_dias] = "color: #D4AC0D; font-weight: bold;"
                     elif estado == "Corregido":
-                        # Corregido: Verde solo en texto
                         styles[idx_estado] = "color: #2ECC71; font-weight: bold;"
                         if idx_dias is not None:
                             styles[idx_dias] = "color: #2ECC71;"
-                            
-                    return styles
+                    elif estado == "Anulado":
+                        styles[idx_estado] = "color: #E74C3C; font-weight: bold;"
+                        if idx_dias is not None:
+                            styles[idx_dias] = "color: #E74C3C;"
+                    elif estado == "Extemporáneo":
+                        styles[idx_estado] = "color: #900C3F; font-weight: bold;"
+                        if idx_dias is not None:
+                            styles[idx_dias] = "color: #900C3F; font-weight: bold;"
 
-                # Preparamos las columnas a mostrar (incluyendo "Días Pendiente")
+                    return styles
+                
+
                 df_visual = df_fuas[[
                     "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente", 
                     "Profesional", "Tipo Observación", "Fecha Atención", "Estado", "Días Pendiente", "Fecha Registro", "Fecha Corrección"
                 ]].copy()
 
-                # Aplicamos el estilo por filas o celdas con Styler
                 df_styled = df_visual.style.apply(resaltar_filas, axis=1)
                 st.dataframe(df_styled, use_container_width=True)
 
                 st.divider()
+                
                 st.markdown("### ⚙️ Gestionar / Cambiar Estado de FUA")
 
-                lista_fua_opciones = [f"ID: {row['ID']} | FUA: {row['Nº FUA']} | Paciente: {row['Paciente']}" for _, row in df_fuas.iterrows()]
-                fua_seleccionada_str = st.selectbox("Seleccione una FUA para gestionar:", options=lista_fua_opciones)
+                # Cambiamos el selectbox por una caja de texto para buscar directamente por número de FUA
+                fua_buscada = st.text_input("Ingrese el número de FUA a gestionar:", placeholder="Ej. 49191119")
 
-                if fua_seleccionada_str:
-                    id_seleccionado = int(fua_seleccionada_str.split("|")[0].replace("ID:", "").strip())
-                    row_actual = df_fuas[df_fuas["ID"] == id_seleccionado].iloc[0]
+                if fua_buscada.strip():
+                    # Filtramos las filas que coincidan con lo que vas escribiendo
+                    df_encontrado = df_fuas[df_fuas["Nº FUA"].astype(str).str.contains(fua_buscada.strip(), case=False, na=False)]
+                    
+                    if not df_encontrado.empty:
+                        # Si hay coincidencia(s), si es única la tomamos directo, o damos a elegir si hay varias
+                        if len(df_encontrado) == 1:
+                            row_actual = df_encontrado.iloc[0]
+                        else:
+                            lista_fua_opciones = [f"ID: {row['ID']} | FUA: {row['Nº FUA']} | Paciente: {row['Paciente']}" for _, row in df_encontrado.iterrows()]
+                            fua_seleccionada_str = st.selectbox("Se encontraron varias coincidencias. Seleccione una:", options=lista_fua_opciones)
+                            id_sel = int(fua_seleccionada_str.split("|")[0].replace("ID:", "").strip())
+                            row_actual = df_fuas[df_fuas["ID"] == id_sel].iloc[0]
 
-                    st.info(f"**FUA Seleccionada:** {row_actual['Nº FUA']} | **Paciente:** {row_actual['Paciente']} | **Estado Actual:** {row_actual['Estado']} | **Antigüedad:** {row_actual['Días Pendiente']} días")
+                        id_seleccionado = int(row_actual["ID"])
 
-                    col_b1, col_b2 = st.columns(2)
+                        st.info(f"**FUA Seleccionada:** {row_actual['Nº FUA']} | **Paciente:** {row_actual['Paciente']} | **Estado Actual:** {row_actual['Estado']} | **Antigüedad:** {row_actual.get('Días Pendiente', '')} días")
 
-                    with col_b1:
-                        st.markdown('<div class="btn-verde-custom">', unsafe_allow_html=True)
-                        if st.button("✅ Marcar como Corregido", use_container_width=True):
-                            ok, msg = actualizar_estado_fua(id_seleccionado, "Corregido")
-                            if ok:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                            
-                    with col_b2:
-                        st.markdown('<div class="btn-rojo-custom">', unsafe_allow_html=True)
-                        if st.button("⌛ Marcar como Pendiente", use_container_width=True):
-                            ok, msg = actualizar_estado_fua(id_seleccionado, "Pendiente")
-                            if ok:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
-                        st.markdown('</div>', unsafe_allow_html=True)
+                        # --- CAPTURAMOS EL DNI DEL USUARIO DESDE st.session_state["user"] ---
+                        user_info = st.session_state.get("user", {})
+                        dni_actual = user_info.get("dni") or user_info.get("username")
 
-                    # INYECTAR ESTILOS AQUÍ ABAJO (para que tengan prioridad sobre el estilo global)
-                    st.markdown("""
-                    <style>
-                        div.btn-verde-custom button {
-                            background-color: #28a745 !important;
-                            border-color: #28a745 !important;
-                            color: #ffffff !important;
-                        }
-                        div.btn-verde-custom button:hover {
-                            background-color: #218838 !important;
-                            border-color: #1e7e34 !important;
-                        }
+                        col_b1, col_b2, col_b3 = st.columns(3)
 
-                        div.btn-rojo-custom button {
-                            background-color: #dc3545 !important;
-                            border-color: #dc3545 !important;
-                            color: #ffffff !important;
-                        }
-                        div.btn-rojo-custom button:hover {
-                            background-color: #c82333 !important;
-                            border-color: #bd2130 !important;
-                        }
-                    </style>
-                    """, unsafe_allow_html=True)
+                        with col_b1:
+                            st.markdown('<div class="btn-verde-custom">', unsafe_allow_html=True)
+                            if st.button("✅ Marcar como Corregido", use_container_width=True):
+                                ok, msg = actualizar_estado_fua(id_seleccionado, "Corregido", dni_actual)
+                                if ok:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                                
+                        with col_b2:
+                            st.markdown('<div class="btn-gris-custom">', unsafe_allow_html=True)
+                            if st.button("🚫 Marcar como Anulado", use_container_width=True):
+                                ok, msg = actualizar_estado_fua(id_seleccionado, "Anulado", dni_actual)
+                                if ok:
+                                    st.warning(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                            st.markdown('</div>', unsafe_allow_html=True)
+
+                        with col_b3:
+                            st.markdown('<div class="btn-rojo-custom">', unsafe_allow_html=True)
+                            if st.button("⌛ Marcar como Pendiente", use_container_width=True):
+                                ok, msg = actualizar_estado_fua(id_seleccionado, "Pendiente", dni_actual)
+                                if ok:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                            st.markdown('</div>', unsafe_allow_html=True)
+
+                        # --- SECCIÓN DE HISTORIAL Y AUDITORÍA ---
+                        st.markdown("---")
+                        with st.expander("📜 Ver Historial de Cambios de esta FUA"):
+                            conn_hist = None
+                            try:
+                                conn_hist = init_connection()
+                                cur_hist = conn_hist.cursor()
+                                
+                                query_historial = """
+                                    SELECT 
+                                        TO_CHAR(h.fecha_movimiento, 'DD/MM/YYYY HH24:MI:SS') AS "Fecha y Hora",
+                                        h.accion AS "Acción Realizada",
+                                        COALESCE(h.estado_anterior, '-') AS "Estado Anterior",
+                                        h.estado_nuevo AS "Estado Nuevo",
+                                        COALESCE(u.nombre_completo, h.usuario_dni, '-') AS "Usuario"
+                                    FROM fua_historial h
+                                    LEFT JOIN usuarios u ON (
+                                        TRIM(h.usuario_dni::text) = TRIM(u.dni::text) OR 
+                                        TRIM(h.usuario_dni::text) = TRIM(u.username::text)
+                                    )
+                                    WHERE h.fua_id = %s
+                                    ORDER BY h.fecha_movimiento DESC;
+                                """
+                                
+                                id_limpio = int(id_seleccionado)
+                                cur_hist.execute(query_historial, (id_limpio,))
+                                filas_hist = cur_hist.fetchall()
+                                
+                                # 🔍 Buscamos el nombre completo del digitador original en la tabla usuarios
+                                dni_digitador = str(row_actual.get("Digitador DNI", ""))
+                                nombre_digitador = dni_digitador
+                                if dni_digitador:
+                                    cur_hist.execute("""
+                                        SELECT nombre_completo FROM usuarios 
+                                        WHERE TRIM(dni::text) = TRIM(%s) OR TRIM(username::text) = TRIM(%s) 
+                                        LIMIT 1
+                                    """, (dni_digitador, dni_digitador))
+                                    res_user = cur_hist.fetchone()
+                                    if res_user and res_user[0]:
+                                        nombre_digitador = res_user[0]
+                                
+                                lista_movimientos = list(filas_hist)
+                                
+                                fecha_creacion = str(row_actual.get("Fecha Registro", "Fecha no disponible"))
+                                estado_inicial = "Pendiente" 
+                                
+                                tupla_creacion = (
+                                    fecha_creacion, 
+                                    "Registro Inicial", 
+                                    "-", 
+                                    estado_inicial, 
+                                    nombre_digitador
+                                )
+                                
+                                lista_movimientos.append(tupla_creacion)
+                                
+                                df_hist = pd.DataFrame(lista_movimientos, columns=[
+                                    "Fecha y Hora", "Acción Realizada", "Estado Anterior", "Estado Nuevo", "Usuario"
+                                ])
+                                st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                                    
+                                cur_hist.close()
+                            except Exception as err_h:
+                                st.error(f"Error al cargar el historial: {err_h}")
+                            finally:
+                                if conn_hist:
+                                    conn_hist.close()
+                        # INYECTAR ESTILOS CSS
+                        st.markdown("""
+                        <style>
+                            div.btn-verde-custom button {
+                                background-color: #28a745 !important;
+                                border-color: #28a745 !important;
+                                color: #ffffff !important;
+                            }
+                            div.btn-verde-custom button:hover {
+                                background-color: #218838 !important;
+                                border-color: #1e7e34 !important;
+                            }
+
+                            div.btn-gris-custom button {
+                                background-color: #6c757d !important;
+                                border-color: #6c757d !important;
+                                color: #ffffff !important;
+                            }
+                            div.btn-gris-custom button:hover {
+                                background-color: #5a6268 !important;
+                                border-color: #545b62 !important;
+                            }
+
+                            div.btn-rojo-custom button {
+                                background-color: #dc3545 !important;
+                                border-color: #dc3545 !important;
+                                color: #ffffff !important;
+                            }
+                            div.btn-rojo-custom button:hover {
+                                background-color: #c82333 !important;
+                                border-color: #bd2130 !important;
+                            }
+                        </style>
+                        """, unsafe_allow_html=True)
             else:
                 st.info("No hay registros que coincidan con los filtros aplicados.")
         else:
-            # Si la base de datos está totalmente vacía
             df_fuas = pd.DataFrame(columns=[
                 "ID", "Nº FUA", "Establecimiento", "DNI Paciente", "Paciente",
                 "Profesional", "Tipo Observación", "Fecha Atención", "Estado", 
@@ -2691,84 +3010,71 @@ else:
                         with open(temp_sql_path, "wb") as f:
                             f.write(archivo_subido.getbuffer())
                         
-                        with st.spinner("Restaurando base de datos en la nube... Esto puede tomar unos segundos."):
+                        with st.spinner("Restaurando base de datos... Esto puede tomar unos segundos."):
+                            import subprocess
+                            import os
+                            import glob
                             import psycopg2
-                            import io
-                            
+
                             # 2. Obtener credenciales de los secrets
                             pg_secrets = st.secrets["postgres"]
-                            
-                            # 3. Conexión directa con psycopg2
-                            conn = psycopg2.connect(
-                                dbname=pg_secrets['database'],
-                                user=pg_secrets['user'],
-                                password=pg_secrets['password'],
-                                host=pg_secrets['host'],
-                                port=pg_secrets['port']
+                            db_name = pg_secrets['database']
+                            db_user = pg_secrets['user']
+                            db_password = pg_secrets['password']
+                            db_host = pg_secrets['host']
+                            db_port = str(pg_secrets['port'])
+
+                            # 3. Limpiar la base de datos actual antes de restaurar
+                            conn_clean = psycopg2.connect(
+                                dbname=db_name, user=db_user, password=db_password, host=db_host, port=db_port
                             )
-                            conn.autocommit = True
-                            cursor = conn.cursor()
-                            
-                            # 4. Limpiar tablas existentes de forma segura
+                            conn_clean.autocommit = True
+                            cursor_clean = conn_clean.cursor()
                             try:
-                                cursor.execute("DO $$ DECLARE r record; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE;'; END LOOP; END $$;")
+                                cursor_clean.execute("DO $$ DECLARE r record; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE;'; END LOOP; END $$;")
                             except Exception as drop_err:
                                 st.warning(f"Nota al limpiar tablas: {drop_err}")
-                            
-                            # 5. Leer y procesar el archivo SQL línea por línea
-                            with open(temp_sql_path, "r", encoding="utf-8", errors="ignore") as f:
-                                lines = f.readlines()
-                            
-                            current_copy_cmd = None
-                            copy_buffer = []
-                            sql_buffer = []
-                            
-                            for line_num, line in enumerate(lines, 1):
-                                stripped = line.strip()
-                                if not stripped or stripped.startswith('--') or stripped.startswith('\\'):
-                                    continue
-                                
-                                if current_copy_cmd:
-                                    if stripped == '\\.' or stripped == '\.':
-                                        data_str = "".join(copy_buffer)
-                                        try:
-                                            cursor.copy_expert(current_copy_cmd, io.StringIO(data_str))
-                                        except Exception as copy_err:
-                                            # Mostrar el error exacto si falla un bloque COPY
-                                            raise Exception(f"Error en bloque COPY (línea {line_num}): {copy_err}")
-                                        current_copy_cmd = None
-                                        copy_buffer = []
-                                    else:
-                                        copy_buffer.append(line)
-                                elif stripped.upper().startswith('COPY '):
-                                    current_copy_cmd = stripped
-                                    copy_buffer = []
-                                else:
-                                    sql_buffer.append(line)
-                                    if stripped.endswith(';'):
-                                        full_sql = "".join(sql_buffer)
-                                        sql_buffer = []
-                                        try:
-                                            cursor.execute(full_sql)
-                                        except Exception as sql_err:
-                                            # Omitir errores menores de extensiones o configuraciones de rol, pero registrar si es crítico
-                                            if "already exists" not in str(sql_err) and "role" not in str(sql_err):
-                                                raise Exception(f"Error en SQL (línea {line_num}): {sql_err}\nConsulta: {full_sql[:100]}...")
-                                            
-                            cursor.close()
-                            conn.close()
-                        
-                        # Limpiar archivo temporal
+                            cursor_clean.close()
+                            conn_clean.close()
+
+                            # 4. Buscar automáticamente la ruta de psql.exe en Windows
+                            rutas_posibles = glob.glob(r"C:\Program Files\PostgreSQL\*\bin\psql.exe")
+                            if rutas_posibles:
+                                psql_exe = rutas_posibles[-1]  # Toma la versión más reciente instalada
+                            else:
+                                psql_exe = "psql"  # Intenta la variable global por si acaso
+
+                            # 5. Configurar contraseña en entorno para psql
+                            env = os.environ.copy()
+                            env["PGPASSWORD"] = db_password
+
+                            # 6. Ejecutar psql con el archivo .sql
+                            cmd = [
+                                psql_exe,
+                                "-h", db_host,
+                                "-p", db_port,
+                                "-U", db_user,
+                                "-d", db_name,
+                                "-f", temp_sql_path
+                            ]
+
+                            resultado = subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+                            if resultado.returncode != 0 and "error" in resultado.stderr.lower():
+                                raise Exception(f"Error en psql: {resultado.stderr}")
+
+                        # 7. Limpiar archivo temporal
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
                             
                         st.success("¡Base de datos restaurada exitosamente! Recargando sistema...")
                         st.rerun()
-                        
+
                     except Exception as e:
                         st.error(f"❌ Error crítico al restaurar: {e}")
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
+            
     
     
 
@@ -3094,7 +3400,7 @@ else:
             ENGINE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
             engine = create_engine(ENGINE_URL)
 
-            # 2. Consulta SQL con JOINs a establecimientos y usuarios
+            # 2. Consulta SQL con la regla para forzar el estado "Anulado"
             query_conciliacion = """
                 SELECT 
                     f.id,
@@ -3106,15 +3412,25 @@ else:
                     
                     -- Estado en ARFSIS
                     CASE 
+                        WHEN f.estado = 'Anulado' THEN 'Anulado'
                         WHEN a.numero_fua IS NOT NULL THEN 'Digitado'
                         ELSE 'Pendiente de Digitación'
                     END AS "Estado en ARFSIS",
                     
-                    -- Nombre del Digitador traído desde la tabla usuarios
-                    COALESCE(u.nombre_completo, a.digitador::text, '-') AS "Digitador",
+                    -- Nombre del Digitador (Si está anulado, muestra el usuario local; si no, el de ARFSIS)
+                    COALESCE(
+                        CASE WHEN f.estado = 'Anulado' THEN ul.nombre_completo END,
+                        u.nombre_completo, 
+                        a.digitador::text, 
+                        '-'
+                    ) AS "Digitador",
                     
-                    -- Fecha de registro en el MINSA
-                    COALESCE(TO_CHAR(a.fecha_registro, 'DD/MM/YYYY'), '-') AS "Fecha Digitación MINSA"
+                    -- Fecha de registro/corrección (Si está anulado, muestra la fecha_correccion de fuas_observadas)
+                    COALESCE(
+                        CASE WHEN f.estado = 'Anulado' THEN TO_CHAR(f.fecha_correccion, 'DD/MM/YYYY') END,
+                        TO_CHAR(a.fecha_registro, 'DD/MM/YYYY'), 
+                        '-'
+                    ) AS "Fecha Digitación MINSA"
 
                 FROM fuas_observadas f
                 LEFT JOIN establecimientos e 
@@ -3123,6 +3439,8 @@ else:
                     ON TRIM(f.numero_fua::text) = TRIM(a.numero_fua::text)
                 LEFT JOIN usuarios u 
                     ON TRIM(a.digitador::text) = TRIM(u.dni::text)
+                LEFT JOIN usuarios ul 
+                    ON TRIM(f.digitador_dni::text) = TRIM(ul.dni::text)
                 ORDER BY f.id DESC;
             """
 
@@ -3131,8 +3449,8 @@ else:
             if not df_bandeja.empty:
                 # 3. Métricas rápidas (KPIs)
                 total_fuas = len(df_bandeja)
-                digitadas = len(df_bandeja[df_bandeja["Estado en ARFSIS"] != "Pendiente de Digitación"])
-                pendientes = total_fuas - digitadas
+                digitadas = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Digitado"])
+                pendientes = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Pendiente de Digitación"])
 
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Total Observadas", total_fuas)
@@ -3147,7 +3465,7 @@ else:
                 with col_f1:
                     filtro_estado = st.selectbox(
                         "Filtrar por Estado:",
-                        ["Todas", "Solo Pendientes", "Solo Digitadas"]
+                        ["Todas", "Pendientes", "Digitadas", "Anulados"]
                     )
 
                 with col_f2:
@@ -3167,10 +3485,12 @@ else:
                 # Aplicar la lógica de filtrado acumulativo
                 df_filtrado = df_bandeja.copy()
 
-                if filtro_estado == "Solo Pendientes":
+                if filtro_estado == "Pendientes":
                     df_filtrado = df_filtrado[df_filtrado["Estado en ARFSIS"] == "Pendiente de Digitación"]
-                elif filtro_estado == "Solo Digitadas":
-                    df_filtrado = df_filtrado[df_filtrado["Estado en ARFSIS"] != "Pendiente de Digitación"]
+                elif filtro_estado == "Digitadas":
+                    df_filtrado = df_filtrado[df_filtrado["Estado en ARFSIS"] == "Digitado"]
+                elif filtro_estado == "Anulados":
+                    df_filtrado = df_filtrado[df_filtrado["Estado Local"] == "Anulado"]
 
                 if filtro_eess != "Todos":
                     df_filtrado = df_filtrado[df_filtrado["Establecimiento"] == filtro_eess]
@@ -3178,9 +3498,12 @@ else:
                 if filtro_digitador != "Todos":
                     df_filtrado = df_filtrado[df_filtrado["Digitador"] == filtro_digitador]
 
-                # 5. Función de formato condicional (Rojo para Pendiente, Verde para Corregido o Digitado)
+                # 5. Función de formato condicional con los colores requeridos
                 def estilizar_estado(val):
-                    if "Pendiente" in str(val):
+                    val_str = str(val)
+                    if "Pendiente" in val_str:
+                        return "color: #D4AC0D; font-weight: bold;"  # Amarillo
+                    elif "Anulado" in val_str:
                         return "color: #E74C3C; font-weight: bold;"  # Rojo
                     elif val in ["Corregido", "Digitado"]:
                         return "color: #2ECC71; font-weight: bold;"  # Verde
@@ -3199,7 +3522,290 @@ else:
 
         except Exception as err:
             st.error(f"Error al conectar con la base de datos o realizar la conciliación: {err}")
-    
-    
 
-   
+
+    elif st.session_state.get("menu_activo") == "Entregar Cargo":
+        st.title("📦 Entrega y Generación de Cargos de FUAs")
+        st.caption("Genera el cargo impreso y registra el historial de entrega de FUAs observadas por profesional y establecimiento.")
+
+        pestana_nuevo, pestana_historial = st.tabs(["📦 Nuevo Cargo", "📋 Historial y Consulta"])
+
+        # ==========================================
+        # PESTAÑA 1: NUEVO CARGO
+        # ==========================================
+        with pestana_nuevo:
+            st.markdown("### 📋 Generación de Nuevo Cargo")
+            
+            try:
+                conn_nuevo = init_connection()
+                # Consulta incluyendo el nombre del establecimiento y el digitador (usuario_registro)
+                query_pendientes = """
+                    SELECT 
+                        f.id AS "ID",
+                        f.numero_fua AS "Nº FUA",
+                        f.id_prestacion AS "ID Prestación",
+                        COALESCE(p.nombres_apellidos, f.profesional_dni) AS "Profesional",
+                        f.tipo_observacion AS "Tipo Observación",
+                        f.fecha_atencion_fua AS "Fecha Atención",
+                        f.fecha_registro AS "Fecha Registro",
+                        COALESCE(e.nombre_establecimiento, f.establecimiento_id::text) AS "Establecimiento",
+                        COALESCE(u.nombre_completo, f.digitador_dni, 'NO ASIGNADO') AS "Digitador",
+                        f.cargo_id
+                    FROM fuas_observadas f
+                    LEFT JOIN profesionales p ON TRIM(f.profesional_dni) = TRIM(p.dni)
+                    LEFT JOIN establecimientos e ON f.establecimiento_id = e.id
+                    LEFT JOIN usuarios u ON TRIM(f.digitador_dni) = TRIM(u.dni)
+                """
+            
+                df_fuas = pd.read_sql(query_pendientes, conn_nuevo)
+                conn_nuevo.close()
+            except Exception as e:
+                st.error(f"Error al conectar con la base de datos: {e}")
+                df_fuas = pd.DataFrame()
+
+            if df_fuas.empty:
+                st.warning("⚠️ No hay registros en la base de datos.")
+            else:
+                # 📊 Cálculo de métricas totales
+                total_general = len(df_fuas)
+                total_pendientes = len(df_fuas[df_fuas["cargo_id"].isna() | (df_fuas["cargo_id"] == 0)])
+                total_con_cargo = total_general - total_pendientes
+
+                # Mostrar tarjetas de métricas en pantalla
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("📊 Total de Registros", total_general)
+                col_m2.metric("⏳ Pendientes (Sin Cargo)", total_pendientes)
+                col_m3.metric("📄 Con Cargo Asignado", total_con_cargo)
+                
+                st.markdown("---")
+
+                # --- FILTROS DE CABECERA (4 Columnas: Profesional, Establecimiento, Digitador, Fechas) ---
+                col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 2])
+                
+                with col_f1:
+                    profesionales_disponibles = ["Todos"] + sorted(df_fuas["Profesional"].dropna().astype(str).unique().tolist()) if "Profesional" in df_fuas.columns else ["Todos"]
+                    profesional_seleccionado = st.selectbox("Seleccionar Profesional Responsable", options=profesionales_disponibles, key="sel_prof_nuevo")
+
+                with col_f2:
+                    establecimientos_disponibles = ["Todos"] + sorted(df_fuas["Establecimiento"].dropna().astype(str).unique().tolist()) if "Establecimiento" in df_fuas.columns else ["Todos"]
+                    establecimiento_seleccionado = st.selectbox("Establecimiento", options=establecimientos_disponibles, key="sel_est_nuevo")
+
+                with col_f3:
+                    digitadores_disponibles = ["Todos"] + sorted(df_fuas["Digitador"].dropna().astype(str).unique().tolist()) if "Digitador" in df_fuas.columns else ["Todos"]
+                    digitador_seleccionado = st.selectbox("Digitador", options=digitadores_disponibles, key="sel_dig_nuevo")
+
+                with col_f4:
+                    # 📌 FILTRO POR RANGO DE FECHA DE REGISTRO
+                    df_fuas["Fecha_Reg_Solo"] = pd.to_datetime(df_fuas["Fecha Registro"], errors='coerce').dt.date
+                    min_fecha = df_fuas["Fecha_Reg_Solo"].min()
+                    max_fecha = df_fuas["Fecha_Reg_Solo"].max()
+                    
+                    if pd.notna(min_fecha) and pd.notna(max_fecha):
+                        rango_fechas_cargo = st.date_input(
+                            "Filtrar por Rango de Fecha de Registro",
+                            value=(min_fecha, max_fecha),
+                            format="DD/MM/YYYY",
+                            key="rango_fecha_nuevo"
+                        )
+                    else:
+                        rango_fechas_cargo = None
+
+                # --- APLICAR FILTROS ---
+                df_bloque = df_fuas.copy()
+
+                if profesional_seleccionado != "Todos":
+                    df_bloque = df_bloque[df_bloque["Profesional"] == profesional_seleccionado]
+
+                if establecimiento_seleccionado != "Todos":
+                    df_bloque = df_bloque[df_bloque["Establecimiento"] == establecimiento_seleccionado]
+
+                if digitador_seleccionado != "Todos":
+                    df_bloque = df_bloque[df_bloque["Digitador"] == digitador_seleccionado]
+
+                if rango_fechas_cargo and isinstance(rango_fechas_cargo, tuple) and len(rango_fechas_cargo) == 2:
+                    f_ini, f_fin = rango_fechas_cargo
+                    df_bloque = df_bloque[
+                        (df_bloque["Fecha_Reg_Solo"] >= f_ini) & 
+                        (df_bloque["Fecha_Reg_Solo"] <= f_fin)
+                    ]
+
+                # --- MOSTRAR RESULTADOS ---
+                st.info(f"📋 Mostrando **{len(df_bloque)}** registros filtrados.")
+                
+                cols_deseadas = ["ID", "Nº FUA", "ID Prestación", "Profesional", "Tipo Observación", "Fecha Atención", "Digitador"]
+                
+                for col in cols_deseadas:
+                    if col not in df_bloque.columns:
+                        df_bloque[col] = "-"
+
+                st.dataframe(df_bloque[cols_deseadas], use_container_width=True, hide_index=True)
+                
+                # 📌 Campo para el DNI del profesional que recibe el bloque
+                dni_prof = st.text_input("DNI del Profesional que Recibe el Bloque (Opcional)", max_chars=8, key="input_dni_nuevo")
+                
+                nombre_encontrado = ""
+                if dni_prof.strip():
+                    try:
+                        conn_temp = init_connection()
+                        query_p = f"SELECT nombres_apellidos FROM profesionales WHERE TRIM(dni) = '{dni_prof.strip()}'"
+                        df_p = pd.read_sql(query_p, conn_temp)
+                        conn_temp.close()
+                        
+                        if not df_p.empty and df_p.iloc[0]["nombres_apellidos"]:
+                            nombre_encontrado = str(df_p.iloc[0]["nombres_apellidos"]).strip().upper()
+                    except Exception as e:
+                        st.error(f"Error en consulta: {e}")
+                    
+                    if nombre_encontrado:
+                        partes = nombre_encontrado.split()
+                        if len(partes) >= 4:
+                            nombres_ordenados = f"{partes[-2]} {partes[-1]} {partes[0]} {partes[1]}"
+                        else:
+                            nombres_ordenados = nombre_encontrado
+
+                        st.success(f"👤 **Profesional Encontrado:** {nombres_ordenados}")
+                        profesional_recibe_str = nombres_ordenados
+                    else:
+                        st.warning(f"⚠️ DNI {dni_prof.strip()} ingresado como referencia para la firma.")
+                        profesional_recibe_str = f"PROFESIONAL (DNI: {dni_prof.strip()})"
+                else:
+                    profesional_recibe_str = profesional_seleccionado if profesional_seleccionado != "Todos" else "Varios / Representante"
+
+                if st.button("🚀 Generar Cargo", type="primary", key="btn_generar_cargo_nuevo"):
+                    if len(df_bloque) == 0:
+                        st.warning("No hay FUAs en este filtro para entregar.")
+                    else:
+                        user_info = st.session_state.get("user", {})
+                        usuario_actual = (
+                            user_info.get("nombre_completo") or 
+                            st.session_state.get("nombre_completo") or 
+                            user_info.get("nombre") or 
+                            user_info.get("nombres") or 
+                            "PERSONAL DE DIGITACIÓN"
+                        )
+                        usuario_actual = str(usuario_actual).strip().upper()
+                        
+                        cargo_id, codigo_cargo = registrar_cargo_entrega(
+                            df_bloque, 
+                            profesional_recibe_str, 
+                            dni_prof, 
+                            establecimiento_seleccionado if establecimiento_seleccionado != "Todos" else "Varios", 
+                            usuario_actual
+                        )
+                        
+                        if cargo_id and codigo_cargo:
+                            st.success(f"¡Cargo **{codigo_cargo}** generado exitosamente!")
+                            
+                            html_cargo = generar_html_cargo(
+                                codigo_cargo, 
+                                profesional_recibe_str, 
+                                establecimiento_seleccionado, 
+                                df_bloque, 
+                                usuario_actual
+                            )
+                            st.components.v1.html(html_cargo, height=600, scrolling=True)
+
+        # ==========================================
+        # PESTAÑA 2: HISTORIAL Y CONSULTA
+        # ==========================================
+        with pestana_historial:
+            st.markdown("### 🔍 Consultar Cargos Anteriores")
+            
+            try:
+                conn_hist = init_connection()
+                df_cargos = pd.read_sql("SELECT * FROM cargos_entrega ORDER BY id DESC", conn_hist)
+                conn_hist.close()
+                
+                if df_cargos.empty:
+                    st.info("No hay cargos registrados todavía.")
+                else:
+                    col_h1, col_h2 = st.columns(2)
+                    with col_h1:
+                        filtro_codigo = st.text_input("🔍 Buscar por Código de Cargo", key="f_cod_hist")
+                    with col_h2:
+                        filtro_profesional = st.text_input("🔍 Buscar por Profesional o DNI", key="f_prof_hist")
+                        
+                    df_filtrado = df_cargos.copy()
+                    if filtro_codigo.strip() and 'codigo_cargo' in df_filtrado.columns:
+                        df_filtrado = df_filtrado[df_filtrado['codigo_cargo'].astype(str).str.contains(filtro_codigo.strip(), case=False, na=False)]
+                    
+                    if filtro_profesional.strip():
+                        mask = df_filtrado['profesional_responsable'].astype(str).str.contains(filtro_profesional.strip(), case=False, na=False)
+                        if 'dni_profesional' in df_filtrado.columns:
+                            mask = mask | df_filtrado['dni_profesional'].astype(str).str.contains(filtro_profesional.strip(), case=False, na=False)
+                        df_filtrado = df_filtrado[mask]
+                        
+                    st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
+                    
+                    st.markdown("---")
+                    st.markdown("### 🖨️ Re-imprimir Cargo del Historial")
+                    
+                    lista_codigos = df_filtrado['codigo_cargo'].tolist() if not df_filtrado.empty else []
+                    if lista_codigos:
+                        cargo_seleccionado = st.selectbox("Seleccione el Código de Cargo a Visualizar:", lista_codigos, key="sel_cargo_reprint")
+                        
+                        if st.button("📄 Cargar y Ver Documento", key="btn_ver_reprint"):
+                            info_cargo = df_cargos[df_cargos['codigo_cargo'] == cargo_seleccionado].iloc[0]
+                            cargo_pk_id = info_cargo['id']
+                            val_prof_cargo = str(info_cargo.get('profesional_responsable', '')).strip()
+                            
+                            conn_det = init_connection()
+                            
+                            # 1. Búsqueda por relación directa (cargo_id) trayendo el Nombre Completo del Profesional
+                            query_detalle = f"""
+                                SELECT 
+                                    f.numero_fua AS "Nº FUA", 
+                                    COALESCE(p.nombres_apellidos, f.profesional_dni) AS "Profesional", 
+                                    f.tipo_observacion AS "Tipo Observación", 
+                                    f.fecha_atencion_fua AS "Fecha Atención"
+                                FROM fuas_observadas f
+                                LEFT JOIN profesionales p ON TRIM(f.profesional_dni) = TRIM(p.dni)
+                                WHERE f.cargo_id = {cargo_pk_id} OR f.cargo_id::text = '{cargo_seleccionado}'
+                            """
+                            df_detalle = pd.read_sql(query_detalle, conn_det)
+                            
+                            # 2. Respaldo por DNI si es un cargo previo
+                            if df_detalle.empty and val_prof_cargo:
+                                query_dni = f"""
+                                    SELECT dni FROM profesionales 
+                                    WHERE nombres_apellidos ILIKE '%{val_prof_cargo}%'
+                                    LIMIT 1
+                                """
+                                df_dni_res = pd.read_sql(query_dni, conn_det)
+                                
+                                if not df_dni_res.empty:
+                                    dni_encontrado = str(df_dni_res.iloc[0]["dni"]).strip()
+                                    query_respaldo = f"""
+                                        SELECT 
+                                            f.numero_fua AS "Nº FUA", 
+                                            COALESCE(p.nombres_apellidos, f.profesional_dni) AS "Profesional", 
+                                            f.tipo_observacion AS "Tipo Observación", 
+                                            f.fecha_atencion_fua AS "Fecha Atención"
+                                        FROM fuas_observadas f
+                                        LEFT JOIN profesionales p ON TRIM(f.profesional_dni) = TRIM(p.dni)
+                                        WHERE TRIM(f.profesional_dni) = '{dni_encontrado}' AND (f.cargo_id IS NULL OR f.cargo_id = 0)
+                                    """
+                                    df_detalle = pd.read_sql(query_respaldo, conn_det)
+                                    
+                            conn_det.close()
+                            
+                            # Aviso si el registro histórico no posee ítems vinculados
+                            if df_detalle.empty:
+                                st.warning("⚠️ Este es un cargo histórico o de prueba anterior; no cuenta con FUAs asociadas en la base de datos.")
+                            
+                            val_prof = str(info_cargo.get('profesional_responsable', 'PROFESIONAL'))
+                            val_est = str(info_cargo.get('establecimiento', 'Varios'))
+                            val_user = str(info_cargo.get('usuario_registro', 'PERSONAL DE DIGITACIÓN'))
+                            
+                            html_reimpresion = generar_html_cargo(
+                                cargo_seleccionado,
+                                val_prof,
+                                val_est,
+                                df_detalle,
+                                val_user
+                            )
+                            
+                            st.components.v1.html(html_reimpresion, height=600, scrolling=True)
+                            
+            except Exception as e:
+                st.error(f"Error al consultar el historial de cargos: {e}")
