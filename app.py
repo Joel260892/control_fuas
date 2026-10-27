@@ -3069,7 +3069,8 @@ else:
         
         # --- PESTAÑA 1: GENERAR BACKUP ---
         with tab_gen:
-            st.write("Genera una copia de seguridad completa en formato `.sql` de toda la base de datos de FUAs.")
+            st.markdown("### 🔄 Generar Backup (LOCAL)")
+            st.write("Genera una copia de seguridad completa en formato `.sql`")
             
             if st.button("🚀 Crear y Descargar Backup"):
                 # Verificar si pg_dump.exe realmente existe en esa ruta
@@ -3113,31 +3114,32 @@ else:
                     except Exception as e:
                         st.error(f"Error al generar el backup: {e}")
 
-        # --- SECCIÓN VISUAL EN LA INTERFAZ (Streamlit) ---
-        st.markdown("### 💾 Generar Respaldo de Base de Datos")
-        st.write("Crea un respaldo actual de la base de datos conectada (local o Supabase) para guardarlo en tu computadora.")
+             # --- SECCIÓN VISUAL EN LA INTERFAZ (Streamlit) ---
+            st.markdown("### 🔄 Generar Backup (NUBE)")
+            st.write("Genera una copia de seguridad completa en formato `.sql`")
 
-        if st.button("📥 Generar y Descargar Backup (.sql)", type="secondary"):
-            ruta_backup = generar_backup_bd()
-            
-            if ruta_backup and os.path.exists(ruta_backup):
-                with open(ruta_backup, "rb") as f:
-                    bytes_sql = f.read()
-                    
-                nombre_descarga = os.path.basename(ruta_backup)
-                st.success("✅ ¡Respaldo generado con éxito!")
-                
-                # Botón de descarga directa en Streamlit
-                st.download_button(
-                    label="⬇️ Hacer clic aquí para descargar el archivo .sql",
-                    data=bytes_sql,
-                    file_name=nombre_descarga,
-                    mime="application/sql"
-                )
+            if st.button("📥 Generar y Descargar Backup (.sql)", type="secondary"):
+                ruta_backup = generar_backup_bd()
+                        
+                if ruta_backup and os.path.exists(ruta_backup):
+                     with open(ruta_backup, "rb") as f:
+                        bytes_sql = f.read()
+                                
+                        nombre_descarga = os.path.basename(ruta_backup)
+                        st.success("✅ ¡Respaldo generado con éxito!")
+                            
+                        # Botón de descarga directa en Streamlit
+                        st.download_button(
+                            label="⬇️ Hacer clic aquí para descargar el archivo .sql",
+                            data=bytes_sql,
+                            file_name=nombre_descarga,
+                            mime="application/sql"
+                        )
 
         # --- PESTAÑA 2: RESTAURAR BACKUP ---
         with tab_rest:
-            st.write("Sube un archivo de respaldo en formato `.sql` para restaurar la base de datos.")
+            st.markdown("### 🔄 Restauración de Base de Datos (local)")
+            st.write("Sube un archivo de respaldo en formato `.sql`")
             
             archivo_subido = st.file_uploader("Selecciona tu archivo .sql", type=["sql"], key="uploader_restore")
             
@@ -3220,27 +3222,27 @@ else:
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
             
-        # --- SECCIÓN VISUAL EN LA INTERFAZ (Streamlit) ---
-        st.markdown("### 🔄 Restauración de Base de Datos")
-        st.write("Sube un archivo de respaldo en formato **.sql** para aplicarlo en el entorno configurado actualmente.")
+            # --- SECCIÓN VISUAL EN LA INTERFAZ (Streamlit) ---
+            st.markdown("### 🔄 Restauración de Base de Datos (NUBE)")
+            st.write("Sube un archivo de respaldo en formato `.sql`")
 
-        archivo_subido = st.file_uploader("Seleccionar archivo de respaldo (.sql)", type=["sql"])
+            archivo_subido = st.file_uploader("Seleccionar archivo de respaldo (.sql)", type=["sql"])
 
-        if archivo_subido is not None:
-            if st.button("🚀 Ejecutar Restauración Ahora", type="primary"):
-                # Guardamos el archivo subido en un archivo temporal de forma segura
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".sql") as tmp_file:
-                    tmp_file.write(archivo_subido.getvalue())
-                    tmp_path = tmp_file.name
-                
-                # Ejecutamos la función de restauración
-                restaurar_backup_bd(tmp_path)
-                
-                # Limpiamos el archivo temporal después de usarlo
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
+            if archivo_subido is not None:
+                if st.button("🚀 Ejecutar Restauración Ahora", type="primary"):
+                    # Guardamos el archivo subido en un archivo temporal de forma segura
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".sql") as tmp_file:
+                        tmp_file.write(archivo_subido.getvalue())
+                        tmp_path = tmp_file.name
+                    
+                    # Ejecutamos la función de restauración
+                    restaurar_backup_bd(tmp_path)
+                    
+                    # Limpiamos el archivo temporal después de usarlo
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
     
 
     elif st.session_state.get("menu_activo") == "Afiliados":
@@ -3260,12 +3262,13 @@ else:
         # --- PESTAÑA 1: VER LISTA ---
         with tab_lista:
             try:
+                # Conexión dinámica compatible con Local y Nube (Supabase)
                 conn = psycopg2.connect(
-                    host="localhost",
-                    database=DB_NAME,
-                    user=DB_USER,
-                    password=DB_PASSWORD,
-                    port="5432"
+                    host=st.secrets["postgres"]["host"],
+                    database=st.secrets["postgres"]["database"],
+                    user=st.secrets["postgres"]["user"],
+                    password=st.secrets["postgres"]["password"],
+                    port=st.secrets["postgres"]["port"]
                 )
                 
                 st.markdown("##### 🔍 Filtros de Búsqueda Avanzada")
