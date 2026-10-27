@@ -1412,9 +1412,10 @@ def generar_backup_bd():
     
     # Usamos pg_dump en formato de texto plano (.sql) para que sirva en ambos entornos
     # Nota: Si estás en Windows, puedes cambiar "pg_dump" por la ruta completa si es necesario:
-    # r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+    pg_dump_path = r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+    
     comando = [
-        "pg_dump",
+        pg_dump_path,
         f"--host={db_host}",
         f"--port={db_port}",
         f"--dbname={db_name}",
