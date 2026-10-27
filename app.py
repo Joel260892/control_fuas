@@ -3356,16 +3356,18 @@ else:
                         
                         # Conexión dinámica: Usa st.secrets si existe (Nube), o variables locales si no
                         if "postgres" in st.secrets:
-                            # Conexión a Supabase (Nube)
+                            pg_config = st.secrets["postgres"]
+                            # Detecta automáticamente si usaste 'dbname' o 'database'
+                            db_name = pg_config.get("dbname") or pg_config.get("database")
+                            
                             conn = psycopg2.connect(
-                                host=st.secrets["postgres"]["host"],
-                                database=st.secrets["postgres"]["dbname"],
-                                user=st.secrets["postgres"]["user"],
-                                password=st.secrets["postgres"]["password"],
-                                port=st.secrets["postgres"]["port"]
+                                host=pg_config["host"],
+                                database=db_name,
+                                user=pg_config["user"],
+                                password=pg_config["password"],
+                                port=pg_config["port"]
                             )
                         else:
-                            # Conexión Local
                             conn = psycopg2.connect(
                                 host="localhost",
                                 database=DB_NAME,
