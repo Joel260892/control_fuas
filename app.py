@@ -3353,29 +3353,45 @@ else:
             if st.button("📊 Generar Archivo Excel para Descarga"):
                 try:
                     with st.spinner("Consultando la base de datos y generando el Excel... Esto puede tomar unos segundos."):
-                        conn = psycopg2.connect(
-                            host="localhost",
-                            database=DB_NAME,
-                            user=DB_USER,
-                            password=DB_PASSWORD,
-                            port="5432"
-                        )
                         
+                        # Conexión dinámica: Usa st.secrets si existe (Nube), o variables locales si no
+                        if "postgres" in st.secrets:
+                            # Conexión a Supabase (Nube)
+                            conn = psycopg2.connect(
+                                host=st.secrets["postgres"]["host"],
+                                database=st.secrets["postgres"]["dbname"],
+                                user=st.secrets["postgres"]["user"],
+                                password=st.secrets["postgres"]["password"],
+                                port=st.secrets["postgres"]["port"]
+                            )
+                        else:
+                            # Conexión Local
+                            conn = psycopg2.connect(
+                                host="localhost",
+                                database=DB_NAME,
+                                user=DB_USER,
+                                password=DB_PASSWORD,
+                                port="5432"
+                            )
+                        
+                        # Consulta segura usando parámetros en lugar de f-strings
                         if establecimiento_filtro:
-                            query_exp = f"""
+                            query_exp = """
                                 SELECT numero, establecimiento, dni, nombre, appaterno, apmaterno, fecha_nacimiento, direccion
                                 FROM afiliados
-                                WHERE establecimiento ILIKE '%{establecimiento_filtro}%'
+                                WHERE establecimiento ILIKE %s
                                 ORDER BY numero ASC;
                             """
+                            params = (f"%{establecimiento_filtro}%",)
+                            df_export = pd.read_sql(query_exp, conn, params=params)
                         else:
                             query_exp = """
                                 SELECT numero, establecimiento, dni, nombre, appaterno, apmaterno, fecha_nacimiento, direccion
                                 FROM afiliados
                                 ORDER BY numero ASC;
                             """
+                            df_export = pd.read_sql(query_exp, conn)
                         
-                        df_export = pd.read_sql(query_exp, conn)
                         conn.close()
                         
                         if not df_export.empty:
@@ -3385,7 +3401,7 @@ else:
                                 df_export.to_excel(writer, index=False, sheet_name='Afiliados')
                             processed_data = output.getvalue()
                             
-                            st.success(f"¡Se han preparado **{len(df_export)}** registros con éxito!")
+                            st.success(f"¡Se han preparado **{len(df_export):,}** registros con éxito!")
                             
                             st.download_button(
                                 label="📥 Descargar Excel de Afiliados",
