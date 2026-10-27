@@ -1389,7 +1389,7 @@ def restaurar_backup_bd(archivo_sql_path):
 
 def generar_backup_bd():
     """
-    Genera un respaldo en formato .sql usando la ruta exacta de PostgreSQL 18.
+    Busca automáticamente la ruta de pg_dump.exe en el sistema y genera el respaldo .sql
     """
     try:
         db_host = st.secrets["postgres"]["host"]
@@ -1401,14 +1401,23 @@ def generar_backup_bd():
         st.error(f"❌ Faltan credenciales en st.secrets: {e}")
         return None
     
-    # Ruta exacta y blindada para PostgreSQL 18 en Windows
-    pg_dump_path = r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+    # Buscamos automáticamente cualquier versión de PostgreSQL instalada en Archivos de Programa
+    patrones_busqueda = [
+        r"C:\Program Files\PostgreSQL\*\bin\pg_dump.exe",
+        r"C:\Program Files (x86)\PostgreSQL\*\bin\pg_dump.exe",
+    ]
     
-    # Verificamos de manera estricta si el archivo realmente existe en tu PC
-    if not os.path.exists(pg_dump_path):
-        st.error(f"❌ No se encontró el archivo ejecutable en: `{pg_dump_path}`. Verifica si tu disco es C: o si la versión es diferente.")
+    pg_dump_path = None
+    for patron in patrones_busqueda:
+        resultados = glob.glob(patron)
+        if resultados:
+            pg_dump_path = resultados[0] # Toma la primera versión que encuentre instalada
+            break
+            
+    if not pg_dump_path or not os.path.exists(pg_dump_path):
+        st.error("❌ No se encontró 'pg_dump.exe' en las rutas estándar de tu PC. Asegúrate de tener instalado el servicio de PostgreSQL (Database Server).")
         return None
-
+    
     # Creamos un nombre de archivo único con la fecha y hora actual
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     nombre_archivo = f"backup_fuas_{timestamp}.sql"
@@ -1441,7 +1450,7 @@ def generar_backup_bd():
             )
         return archivo_destino
     except subprocess.CalledProcessError as e:
-        st.error(f"❌ Error al generar el respaldo en la base de datos:")
+        st.error(f"❌ Error al generar el respaldo:")
         st.code(e.stderr)
         return None
     
