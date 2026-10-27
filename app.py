@@ -1389,8 +1389,7 @@ def restaurar_backup_bd(archivo_sql_path):
 
 def generar_backup_bd():
     """
-    Genera un respaldo en formato .sql detectando automáticamente si es local o Supabase.
-    Retorna la ruta del archivo generado o None si falla.
+    Genera un respaldo en formato .sql usando la ruta exacta de PostgreSQL 18.
     """
     try:
         db_host = st.secrets["postgres"]["host"]
@@ -1402,17 +1401,20 @@ def generar_backup_bd():
         st.error(f"❌ Faltan credenciales en st.secrets: {e}")
         return None
     
+    # Ruta exacta y blindada para PostgreSQL 18 en Windows
+    pg_dump_path = r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+    
+    # Verificamos de manera estricta si el archivo realmente existe en tu PC
+    if not os.path.exists(pg_dump_path):
+        st.error(f"❌ No se encontró el archivo ejecutable en: `{pg_dump_path}`. Verifica si tu disco es C: o si la versión es diferente.")
+        return None
+
     # Creamos un nombre de archivo único con la fecha y hora actual
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     nombre_archivo = f"backup_fuas_{timestamp}.sql"
     
-    # Ruta temporal para guardar el archivo antes de descargarlo
     temp_dir = tempfile.gettempdir()
     archivo_destino = os.path.join(temp_dir, nombre_archivo)
-    
-    # Usamos pg_dump en formato de texto plano (.sql) para que sirva en ambos entornos
-    # Nota: Si estás en Windows, puedes cambiar "pg_dump" por la ruta completa si es necesario:
-    pg_dump_path = r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
     
     comando = [
         pg_dump_path,
@@ -1439,11 +1441,8 @@ def generar_backup_bd():
             )
         return archivo_destino
     except subprocess.CalledProcessError as e:
-        st.error(f"❌ Error al generar el respaldo:")
+        st.error(f"❌ Error al generar el respaldo en la base de datos:")
         st.code(e.stderr)
-        return None
-    except FileNotFoundError:
-        st.error("❌ No se encontró el comando 'pg_dump' en el sistema. Asegúrate de que PostgreSQL esté instalado y en el PATH.")
         return None
     
 # ==========================================
