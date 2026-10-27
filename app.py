@@ -1390,7 +1390,7 @@ def restaurar_backup_bd(archivo_sql_path):
 
 def generar_backup_bd():
     """
-    Busca automáticamente la ruta de pg_dump.exe en el sistema y genera el respaldo .sql
+    Genera un respaldo usando la ruta de pg_dump especificada desde la interfaz.
     """
     try:
         db_host = st.secrets["postgres"]["host"]
@@ -1399,27 +1399,23 @@ def generar_backup_bd():
         db_user = st.secrets["postgres"]["user"]
         db_password = st.secrets["postgres"]["password"]
     except Exception as e:
-        st.error(f"❌ Faltan credenciales en st.secrets: {e}")
+        st.error(f"Faltan credenciales en st.secrets: {e}")
         return None
     
-    # Buscamos automáticamente cualquier versión de PostgreSQL instalada en Archivos de Programa
-    patrones_busqueda = [
-        r"C:\Program Files\PostgreSQL\*\bin\pg_dump.exe",
-        r"C:\Program Files (x86)\PostgreSQL\*\bin\pg_dump.exe",
-    ]
+    # Campo en la interfaz para ajustar la ruta si estás en local
+    pg_dump_path = st.text_input(
+        "Ruta del ejecutable pg_dump.exe (Solo para entorno local):",
+        value=r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+    )
     
-    pg_dump_path = None
-    for patron in patrones_busqueda:
-        resultados = glob.glob(patron)
-        if resultados:
-            pg_dump_path = resultados[0] # Toma la primera versión que encuentre instalada
-            break
-            
-    if not pg_dump_path or not os.path.exists(pg_dump_path):
-        st.error("❌ No se encontró 'pg_dump.exe' en las rutas estándar de tu PC. Asegúrate de tener instalado el servicio de PostgreSQL (Database Server).")
+    # Si estamos en la nube de Streamlit Cloud, detectamos automáticamente si existe el binario del paquete Linux
+    es_nube = "supabase" in db_host or "pooler" in db_host or not os.path.exists("C:")
+    if es_nube:
+        pg_dump_path = "pg_dump" # En Linux de la nube se usa directamente gracias al packages.txt
+    elif not os.path.exists(pg_dump_path):
+        st.error(f"No se encontró el archivo en la ruta: {pg_dump_path}. Verifica la carpeta de tu instalación de PostgreSQL.")
         return None
     
-    # Creamos un nombre de archivo único con la fecha y hora actual
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     nombre_archivo = f"backup_fuas_{timestamp}.sql"
     
@@ -1451,7 +1447,7 @@ def generar_backup_bd():
             )
         return archivo_destino
     except subprocess.CalledProcessError as e:
-        st.error(f"❌ Error al generar el respaldo:")
+        st.error("Error al generar el respaldo:")
         st.code(e.stderr)
         return None
     
