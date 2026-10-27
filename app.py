@@ -12,6 +12,7 @@ import numpy as np
 from sqlalchemy import create_engine
 import random
 import tempfile
+import glob
 
 
 # --- AQUÍ ARRIBA COLOCAS LAS CREDENCIALES Y RUTAS ---
