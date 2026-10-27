@@ -11,6 +11,7 @@ import subprocess
 import numpy as np
 from sqlalchemy import create_engine
 import random
+import tempfile
 
 
 # --- AQUÍ ARRIBA COLOCAS LAS CREDENCIALES Y RUTAS ---
@@ -1328,6 +1329,122 @@ def generar_html_cargo(codigo_cargo, profesional_recibe, establecimiento, df_blo
     </html>
     """
     return html
+
+def restaurar_backup_bd(archivo_sql_path):
+    """
+    Restaura un archivo .sql detectando automáticamente si es entorno local o remoto (Supabase).
+    """
+    try:
+        # Obtenemos los parámetros de conexión actuales desde st.secrets
+        db_host = st.secrets["postgres"]["host"]
+        db_port = str(st.secrets["postgres"]["port"])
+        db_name = st.secrets["postgres"]["database"]
+        db_user = st.secrets["postgres"]["user"]
+        db_password = st.secrets["postgres"]["password"]
+    except Exception as e:
+        st.error(f"❌ Faltan credenciales en st.secrets para la base de datos: {e}")
+        return False
+    
+    # Detectamos si es Supabase o entorno local basado en el host
+    es_nube = "supabase" in db_host or "pooler" in db_host
+    
+    if es_nube:
+        st.info("☁️ Conectando con la nube de Supabase para restauración...")
+    else:
+        st.info("💻 Conectando con la base de datos local...")
+    
+    # Comando psql estándar (compatible con local y Supabase)
+    # Nota: Si estás en Windows y 'psql' no es reconocido directamente, 
+    # puedes cambiar "psql" por la ruta completa, ej: r"C:\Program Files\PostgreSQL\18\bin\psql.exe"
+    comando = [
+        "psql",
+        f"--host={db_host}",
+        f"--port={db_port}",
+        f"--dbname={db_name}",
+        f"--username={db_user}",
+        f"--file={archivo_sql_path}"
+    ]
+    
+    # Configuramos la contraseña de forma segura por variable de entorno
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+    
+    try:
+        resultado = subprocess.run(
+            comando, 
+            capture_output=True, 
+            text=True, 
+            env=env, 
+            check=True
+        )
+        st.success("✅ ¡Base de datos restaurada exitosamente!")
+        return True
+    except subprocess.CalledProcessError as e:
+        st.error(f"❌ Error al restaurar la base de datos:")
+        st.code(e.stderr)
+        return False
+    except FileNotFoundError:
+        st.error("❌ No se encontró el comando 'psql' en el sistema. Asegúrate de que PostgreSQL esté instalado y en las variables de entorno (PATH).")
+        return False
+
+def generar_backup_bd():
+    """
+    Genera un respaldo en formato .sql detectando automáticamente si es local o Supabase.
+    Retorna la ruta del archivo generado o None si falla.
+    """
+    try:
+        db_host = st.secrets["postgres"]["host"]
+        db_port = str(st.secrets["postgres"]["port"])
+        db_name = st.secrets["postgres"]["database"]
+        db_user = st.secrets["postgres"]["user"]
+        db_password = st.secrets["postgres"]["password"]
+    except Exception as e:
+        st.error(f"❌ Faltan credenciales en st.secrets: {e}")
+        return None
+    
+    # Creamos un nombre de archivo único con la fecha y hora actual
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_archivo = f"backup_fuas_{timestamp}.sql"
+    
+    # Ruta temporal para guardar el archivo antes de descargarlo
+    temp_dir = tempfile.gettempdir()
+    archivo_destino = os.path.join(temp_dir, nombre_archivo)
+    
+    # Usamos pg_dump en formato de texto plano (.sql) para que sirva en ambos entornos
+    # Nota: Si estás en Windows, puedes cambiar "pg_dump" por la ruta completa si es necesario:
+    # r"C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
+    comando = [
+        "pg_dump",
+        f"--host={db_host}",
+        f"--port={db_port}",
+        f"--dbname={db_name}",
+        f"--username={db_user}",
+        "--no-owner",
+        "--no-privileges",
+        f"--file={archivo_destino}"
+    ]
+    
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+    
+    try:
+        with st.spinner("Generando respaldo de la base de datos..."):
+            subprocess.run(
+                comando, 
+                env=env, 
+                check=True, 
+                capture_output=True, 
+                text=True
+            )
+        return archivo_destino
+    except subprocess.CalledProcessError as e:
+        st.error(f"❌ Error al generar el respaldo:")
+        st.code(e.stderr)
+        return None
+    except FileNotFoundError:
+        st.error("❌ No se encontró el comando 'pg_dump' en el sistema. Asegúrate de que PostgreSQL esté instalado y en el PATH.")
+        return None
+    
 # ==========================================
 # 2. CONTROL DE SESIÓN Y NAVEGACIÓN
 # ==========================================
@@ -2990,6 +3107,28 @@ else:
                     except Exception as e:
                         st.error(f"Error al generar el backup: {e}")
 
+        # --- SECCIÓN VISUAL EN LA INTERFAZ (Streamlit) ---
+        st.markdown("### 💾 Generar Respaldo de Base de Datos")
+        st.write("Crea un respaldo actual de la base de datos conectada (local o Supabase) para guardarlo en tu computadora.")
+
+        if st.button("📥 Generar y Descargar Backup (.sql)", type="secondary"):
+            ruta_backup = generar_backup_bd()
+            
+            if ruta_backup and os.path.exists(ruta_backup):
+                with open(ruta_backup, "rb") as f:
+                    bytes_sql = f.read()
+                    
+                nombre_descarga = os.path.basename(ruta_backup)
+                st.success("✅ ¡Respaldo generado con éxito!")
+                
+                # Botón de descarga directa en Streamlit
+                st.download_button(
+                    label="⬇️ Hacer clic aquí para descargar el archivo .sql",
+                    data=bytes_sql,
+                    file_name=nombre_descarga,
+                    mime="application/sql"
+                )
+
         # --- PESTAÑA 2: RESTAURAR BACKUP ---
         with tab_rest:
             st.write("Sube un archivo de respaldo en formato `.sql` para restaurar la base de datos.")
@@ -3075,7 +3214,27 @@ else:
                         if os.path.exists(temp_sql_path):
                             os.remove(temp_sql_path)
             
-    
+        # --- SECCIÓN VISUAL EN LA INTERFAZ (Streamlit) ---
+        st.markdown("### 🔄 Restauración de Base de Datos")
+        st.write("Sube un archivo de respaldo en formato **.sql** para aplicarlo en el entorno configurado actualmente.")
+
+        archivo_subido = st.file_uploader("Seleccionar archivo de respaldo (.sql)", type=["sql"])
+
+        if archivo_subido is not None:
+            if st.button("🚀 Ejecutar Restauración Ahora", type="primary"):
+                # Guardamos el archivo subido en un archivo temporal de forma segura
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".sql") as tmp_file:
+                    tmp_file.write(archivo_subido.getvalue())
+                    tmp_path = tmp_file.name
+                
+                # Ejecutamos la función de restauración
+                restaurar_backup_bd(tmp_path)
+                
+                # Limpiamos el archivo temporal después de usarlo
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
     
 
     elif st.session_state.get("menu_activo") == "Afiliados":
