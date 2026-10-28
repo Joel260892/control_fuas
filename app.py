@@ -422,27 +422,27 @@ def actualizar_estado_fua(fua_id, nuevo_estado, dni_usuario=None):
         
         numero_fua, estado_anterior = resultado
 
-        # 2. Actualizar estado y fecha de corrección
+        # 2. Actualizar estado y fecha de corrección (SIN tocar digitador_dni)
         if nuevo_estado in ["Corregido", "Anulado"]:
             cur.execute(
                 """
                 UPDATE fuas_observadas 
-                SET estado = %s, fecha_correccion = NOW(), digitador_dni = COALESCE(%s, digitador_dni)
+                SET estado = %s, fecha_correccion = NOW()
                 WHERE id = %s;
                 """,
-                (nuevo_estado, dni_usuario, fua_id)
+                (nuevo_estado, fua_id)
             )
         else:
             cur.execute(
                 """
                 UPDATE fuas_observadas 
-                SET estado = %s, fecha_correccion = NULL, digitador_dni = COALESCE(%s, digitador_dni)
+                SET estado = %s, fecha_correccion = NULL
                 WHERE id = %s;
                 """,
-                (nuevo_estado, dni_usuario, fua_id)
+                (nuevo_estado, fua_id)
             )
 
-        # 3. Registrar en el historial guardando el DNI del usuario
+        # 3. Registrar en el historial guardando el DNI del usuario que hace el cambio actual
         cur.execute(
             """
             INSERT INTO fua_historial (fua_id, numero_fua, accion, estado_anterior, estado_nuevo, usuario_dni)
@@ -2571,6 +2571,43 @@ else:
                                 conn_hist = init_connection()
                                 cur_hist = conn_hist.cursor()
                                 
+                                id_limpio = int(id_seleccionado)
+                                
+                                # 1. Extraer los datos de creación original de la FUA desde row_actual
+                                fecha_creacion = str(
+                                    row_actual.get("fecha_registro") or 
+                                    row_actual.get("Fecha Registro") or 
+                                    row_actual.get("fecha_atencion_fua") or 
+                                    "Fecha no disponible"
+                                )
+                                if hasattr(fecha_creacion, "strftime"):
+                                    fecha_creacion = fecha_creacion.strftime("%d/%m/%Y %H:%M:%S")
+
+                                dni_digitador = str(
+                                    row_actual.get("digitador_dni") or 
+                                    row_actual.get("Digitador DNI") or 
+                                    ""
+                                ).strip()
+                                
+                                nombre_digitador = dni_digitador
+                                
+                                # Buscar el nombre completo del usuario creador original
+                                if dni_digitador:
+                                    cur_hist.execute("""
+                                        SELECT nombre_completo FROM usuarios 
+                                        WHERE TRIM(dni::text) = TRIM(%s) OR TRIM(username::text) = TRIM(%s) 
+                                        LIMIT 1
+                                    """, (dni_digitador, dni_digitador))
+                                    res_user = cur_hist.fetchone()
+                                    if res_user and res_user[0]:
+                                        nombre_digitador = res_user[0]
+
+                                # 2. CREAR LA LISTA INICIAL obligatoriamente con el Registro Inicial arriba del todo
+                                lista_movimientos = [
+                                    (fecha_creacion, "Registro Inicial", "-", "Pendiente", nombre_digitador)
+                                ]
+                                
+                                # 3. Consultar los cambios posteriores registrados en la base de datos
                                 query_historial = """
                                     SELECT 
                                         TO_CHAR(h.fecha_movimiento, 'DD/MM/YYYY HH24:MI:SS') AS "Fecha y Hora",
@@ -2583,46 +2620,26 @@ else:
                                         TRIM(h.usuario_dni::text) = TRIM(u.dni::text) OR 
                                         TRIM(h.usuario_dni::text) = TRIM(u.username::text)
                                     )
-                                    WHERE h.fua_id = %s
-                                    ORDER BY h.fecha_movimiento DESC;
+                                    WHERE h.fua_id = %s AND h.accion != 'Registro Inicial'
+                                    ORDER BY h.fecha_movimiento ASC;
                                 """
                                 
-                                id_limpio = int(id_seleccionado)
                                 cur_hist.execute(query_historial, (id_limpio,))
-                                filas_hist = cur_hist.fetchall()
+                                filas_db = cur_hist.fetchall()
                                 
-                                # 🔍 Buscamos el nombre completo del digitador original en la tabla usuarios
-                                dni_digitador = str(row_actual.get("Digitador DNI", ""))
-                                nombre_digitador = dni_digitador
-                                if dni_digitador:
-                                    cur_hist.execute("""
-                                        SELECT nombre_completo FROM usuarios 
-                                        WHERE TRIM(dni::text) = TRIM(%s) OR TRIM(username::text) = TRIM(%s) 
-                                        LIMIT 1
-                                    """, (dni_digitador, dni_digitador))
-                                    res_user = cur_hist.fetchone()
-                                    if res_user and res_user[0]:
-                                        nombre_digitador = res_user[0]
+                                # 4. Agregar los cambios posteriores debajo del registro inicial
+                                for reg in filas_db:
+                                    lista_movimientos.append((reg[0], reg[1], reg[2], reg[3], reg[4]))
                                 
-                                lista_movimientos = list(filas_hist)
-                                
-                                fecha_creacion = str(row_actual.get("Fecha Registro", "Fecha no disponible"))
-                                estado_inicial = "Pendiente" 
-                                
-                                tupla_creacion = (
-                                    fecha_creacion, 
-                                    "Registro Inicial", 
-                                    "-", 
-                                    estado_inicial, 
-                                    nombre_digitador
-                                )
-                                
-                                lista_movimientos.append(tupla_creacion)
-                                
+                                # 5. Convertir a DataFrame y mostrar en Streamlit
                                 df_hist = pd.DataFrame(lista_movimientos, columns=[
                                     "Fecha y Hora", "Acción Realizada", "Estado Anterior", "Estado Nuevo", "Usuario"
                                 ])
-                                st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                                
+                                if not df_hist.empty:
+                                    st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                                else:
+                                    st.info("No hay registros en el historial para esta FUA.")
                                     
                                 cur_hist.close()
                             except Exception as err_h:
@@ -2630,6 +2647,12 @@ else:
                             finally:
                                 if conn_hist:
                                     conn_hist.close()
+
+
+
+
+
+
                         # INYECTAR ESTILOS CSS
                         st.markdown("""
                         <style>
