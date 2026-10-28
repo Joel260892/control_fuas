@@ -875,31 +875,67 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
     corregidos = len(
         df_fuas[df_fuas["estado"].astype(str).str.lower() == "corregido"]
     )
+    anuladas = len(
+        df_fuas[df_fuas["estado"].astype(str).str.lower() == "anulado"]
+    )
     num_establecimientos = df_fuas["establecimiento"].nunique()
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
     with col1:
-        st.metric(
-            label="Total FUAs Observadas", value=f"{total_observados:,}"
-        )
+        st.markdown(f"""
+            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Total FUAs Observadas</p>
+                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{total_observados:,}</h2>
+                <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                    Total
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+
     with col2:
-        st.metric(
-            label="Pendientes",
-            value=f"{pendientes:,}",
-            delta="Requieren atención",
-            delta_color="inverse",
-        )
+        st.markdown(f"""
+            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Pendientes</p>
+                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{pendientes:,}</h2>
+                <span style="background-color: #332b00; color: #ffcc00; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                    Requieren atención
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+
     with col3:
-        st.metric(
-            label="Corregidas",
-            value=f"{corregidos:,}",
-            delta="Completadas",
-        )
+        st.markdown(f"""
+            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Corregidas</p>
+                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{corregidos:,}</h2>
+                <span style="background-color: #113322; color: #00cc66; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                    Completadas
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+
     with col4:
-        st.metric(
-            label="Establecimientos con datos",
-            value=f"{num_establecimientos} / 6",
-        )
+        st.markdown(f"""
+            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Anuladas</p>
+                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{anuladas:,}</h2>
+                <span style="background-color: #331111; color: #ff4444; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                    Anuladas
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col5:
+        st.markdown(f"""
+            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Establecimientos</p>
+                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{num_establecimientos} / 6</h2>
+                <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                    Activos
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -3596,7 +3632,7 @@ else:
 
     if st.session_state.get("menu_activo") == "Sincronizacion ARFSIS-Web":
         st.title("📊 Bandeja de Control y Conciliación de FUAs")
-        st.caption("Cruza automáticamente las FUAs observadas con el reporte oficial de ARFSIS-Web del MINSA.")
+        st.markdown("Cruza automáticamente las FUAs observadas con el reporte oficial de ARFSIS-Web del MINSA.")
 
         try:
             # 1. Conexión a la base de datos usando st.secrets
@@ -3609,8 +3645,17 @@ else:
             ENGINE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
             engine = create_engine(ENGINE_URL)
 
-            # 2. Consulta SQL con la regla para forzar el estado "Anulado"
+            # 2. Consulta SQL optimizada para evitar duplicados por cruces con ARFSIS
             query_conciliacion = """
+                WITH arfsis_limpio AS (
+                    -- Aseguramos que cada número de FUA aparezca una sola vez (tomando el más reciente o el primero)
+                    SELECT DISTINCT ON (TRIM(numero_fua::text)) 
+                        numero_fua, 
+                        digitador, 
+                        fecha_registro
+                    FROM digitados_arfsis
+                    ORDER BY TRIM(numero_fua::text), fecha_registro DESC
+                )
                 SELECT 
                     f.id,
                     f.numero_fua AS "Nº FUA",
@@ -3626,7 +3671,7 @@ else:
                         ELSE 'Pendiente de Digitación'
                     END AS "Estado en ARFSIS",
                     
-                    -- Nombre del Digitador (Si está anulado, muestra el usuario local; si no, el de ARFSIS)
+                    -- Nombre del Digitador
                     COALESCE(
                         CASE WHEN f.estado = 'Anulado' THEN ul.nombre_completo END,
                         u.nombre_completo, 
@@ -3634,7 +3679,7 @@ else:
                         '-'
                     ) AS "Digitador",
                     
-                    -- Fecha de registro/corrección (Si está anulado, muestra la fecha_correccion de fuas_observadas)
+                    -- Fecha de registro/corrección
                     COALESCE(
                         CASE WHEN f.estado = 'Anulado' THEN TO_CHAR(f.fecha_correccion, 'DD/MM/YYYY') END,
                         TO_CHAR(a.fecha_registro, 'DD/MM/YYYY'), 
@@ -3644,7 +3689,7 @@ else:
                 FROM fuas_observadas f
                 LEFT JOIN establecimientos e 
                     ON f.establecimiento_id = e.id
-                LEFT JOIN digitados_arfsis a 
+                LEFT JOIN arfsis_limpio a 
                     ON TRIM(f.numero_fua::text) = TRIM(a.numero_fua::text)
                 LEFT JOIN usuarios u 
                     ON TRIM(a.digitador::text) = TRIM(u.dni::text)
@@ -3660,11 +3705,57 @@ else:
                 total_fuas = len(df_bandeja)
                 digitadas = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Digitado"])
                 pendientes = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Pendiente de Digitación"])
+                anuladas = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Anulado"])
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Total Observadas", total_fuas)
-                col2.metric("Ya Digitadas (MINSA)", digitadas, delta=f"{digitadas}")
-                col3.metric("Pendientes", pendientes, delta=f"-{pendientes}", delta_color="inverse")
+                col1, col2, col3, col4 = st.columns(4)
+
+                # Tarjeta 1: Total Observadas (Estilo neutro/azulado)
+                with col1:
+                    st.markdown(f"""
+                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Total Observadas</p>
+                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{total_fuas}</h2>
+                            <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                                Total
+                            </span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                # Tarjeta 2: Ya Digitadas (Verde)
+                with col2:
+                    st.markdown(f"""
+                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Ya Digitadas (MINSA)</p>
+                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{digitadas}</h2>
+                            <span style="background-color: #113322; color: #00cc66; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                                ↑ {digitadas}
+                            </span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                # Tarjeta 3: Pendientes (Amarillo)
+                with col3:
+                    st.markdown(f"""
+                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Pendientes</p>
+                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{pendientes}</h2>
+                            <span style="background-color: #332b00; color: #ffcc00; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                                ↓ -{pendientes}
+                            </span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                # Tarjeta 4: Anuladas (Rojo)
+                with col4:
+                    st.markdown(f"""
+                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
+                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Anuladas</p>
+                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{anuladas}</h2>
+                            <span style="background-color: #331111; color: #ff4444; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
+                                ↓ {anuladas}
+                            </span>
+                        </div>
+                    """, unsafe_allow_html=True)
 
                 st.markdown("---")
 
