@@ -884,56 +884,76 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
     
     with col1:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Total FUAs Observadas</p>
-                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{total_observados:,}</h2>
-                <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                    Total
-                </span>
+            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                <div>
+                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Total FUAs Observadas</p>
+                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{total_observados:,}</h2>
+                </div>
+                <div>
+                    <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                        Total
+                    </span>
+                </div>
             </div>
         """, unsafe_allow_html=True)
 
     with col2:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Pendientes</p>
-                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{pendientes:,}</h2>
-                <span style="background-color: #332b00; color: #ffcc00; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                    Requieren atención
-                </span>
+            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                <div>
+                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Pendientes</p>
+                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{pendientes:,}</h2>
+                </div>
+                <div>
+                    <span style="background-color: #332b00; color: #ffcc00; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                        Requieren atención
+                    </span>
+                </div>
             </div>
         """, unsafe_allow_html=True)
 
     with col3:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Corregidas</p>
-                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{corregidos:,}</h2>
-                <span style="background-color: #113322; color: #00cc66; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                    Completadas
-                </span>
+            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                <div>
+                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Corregidas</p>
+                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{corregidos:,}</h2>
+                </div>
+                <div>
+                    <span style="background-color: #113322; color: #00cc66; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                        Completadas
+                    </span>
+                </div>
             </div>
         """, unsafe_allow_html=True)
 
     with col4:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Anuladas</p>
-                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{anuladas:,}</h2>
-                <span style="background-color: #331111; color: #ff4444; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                    Anuladas
-                </span>
+            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                <div>
+                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Anuladas</p>
+                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{anuladas:,}</h2>
+                </div>
+                <div>
+                    <span style="background-color: #331111; color: #ff4444; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                        Anuladas
+                    </span>
+                </div>
             </div>
         """, unsafe_allow_html=True)
 
     with col5:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Establecimientos</p>
-                <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{num_establecimientos} / 6</h2>
-                <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                    Activos
-                </span>
+            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                <div>
+                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Establecimientos</p>
+                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{num_establecimientos} / 6</h2>
+                </div>
+                <div>
+                    <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                        Activos
+                    </span>
+                </div>
             </div>
         """, unsafe_allow_html=True)
 
@@ -3701,7 +3721,7 @@ else:
             df_bandeja = pd.read_sql(query_conciliacion, con=engine)
 
             if not df_bandeja.empty:
-                # 3. Métricas rápidas (KPIs)
+                # 3. Métricas rápidas (KPIs) con diseño flexible y adaptativo
                 total_fuas = len(df_bandeja)
                 digitadas = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Digitado"])
                 pendientes = len(df_bandeja[df_bandeja["Estado en ARFSIS"] == "Pendiente de Digitación"])
@@ -3709,51 +3729,63 @@ else:
 
                 col1, col2, col3, col4 = st.columns(4)
 
-                # Tarjeta 1: Total Observadas (Estilo neutro/azulado)
                 with col1:
                     st.markdown(f"""
-                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Total Observadas</p>
-                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{total_fuas}</h2>
-                            <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                                Total
-                            </span>
+                        <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                            <div>
+                                <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Total Observadas</p>
+                                <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{total_fuas}</h2>
+                            </div>
+                            <div>
+                                <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                                    Total
+                                </span>
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
 
-                # Tarjeta 2: Ya Digitadas (Verde)
                 with col2:
                     st.markdown(f"""
-                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Ya Digitadas (MINSA)</p>
-                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{digitadas}</h2>
-                            <span style="background-color: #113322; color: #00cc66; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                                ↑ {digitadas}
-                            </span>
+                        <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                            <div>
+                                <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Ya Digitadas (MINSA)</p>
+                                <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{digitadas}</h2>
+                            </div>
+                            <div>
+                                <span style="background-color: #113322; color: #00cc66; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                                    ↑ {digitadas}
+                                </span>
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
 
-                # Tarjeta 3: Pendientes (Amarillo)
                 with col3:
                     st.markdown(f"""
-                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Pendientes</p>
-                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{pendientes}</h2>
-                            <span style="background-color: #332b00; color: #ffcc00; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                                ↓ -{pendientes}
-                            </span>
+                        <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                            <div>
+                                <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Pendientes</p>
+                                <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{pendientes}</h2>
+                            </div>
+                            <div>
+                                <span style="background-color: #332b00; color: #ffcc00; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                                    ↓ -{pendientes}
+                                </span>
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
 
-                # Tarjeta 4: Anuladas (Rojo)
                 with col4:
                     st.markdown(f"""
-                        <div style="background-color: #0e1117; padding: 15px; border-radius: 8px; border: 1px solid #262730; height: 110px;">
-                            <p style="color: #a3a8b8; font-size: 13px; margin-bottom: 2px;">Anuladas</p>
-                            <h2 style="color: white; margin-top: 0px; margin-bottom: 8px; font-size: 26px;">{anuladas}</h2>
-                            <span style="background-color: #331111; color: #ff4444; padding: 2px 8px; border-radius: 10px; font-size: 15px; font-weight: bold;">
-                                ↓ {anuladas}
-                            </span>
+                        <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+                            <div>
+                                <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Anuladas</p>
+                                <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{anuladas}</h2>
+                            </div>
+                            <div>
+                                <span style="background-color: #331111; color: #ff4444; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
+                                    ↓ {anuladas}
+                                </span>
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
 
