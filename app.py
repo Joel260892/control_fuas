@@ -13,6 +13,12 @@ from sqlalchemy import create_engine
 import random
 import tempfile
 import glob
+from theme import (
+    TEMAS_DISPONIBLES,
+    get_theme,
+    apply_theme_css
+)
+
 
 
 # --- AQUÍ ARRIBA COLOCAS LAS CREDENCIALES Y RUTAS ---
@@ -807,7 +813,15 @@ def obtener_todos_profesionales():
     """
     # Ejecutas la query y devuelves los registros como lista de tuplas/diccionarios
 
-def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo crea adentro
+def render_dashboard(estilos):  # Ya no necesita recibir 'conn' como parámetro, lo crea adentro
+
+    CARD_BG = estilos["bg_card"]
+    CARD_BORDER = estilos["border_card"]
+    TEXT_MAIN = estilos["text_main"]
+    TEXT_SUB = estilos["text_sub"]
+
+    ACCENT = estilos.get("accent", "#2f81f7")
+
     st.title("📊 Estadisticas de FUAs Observadas")
     st.markdown(
         "Resumen y métricas en tiempo real de las observaciones registradas en los establecimientos de salud."
@@ -884,10 +898,10 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
     
     with col1:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+            <div style="background-color: {CARD_BG}; padding: 12px; border-radius: 8px; border: 1px solid {CARD_BORDER}; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
                 <div>
-                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Total FUAs Observadas</p>
-                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{total_observados:,}</h2>
+                    <p style="color: {TEXT_SUB}; font-size: 12px; margin-bottom: 2px;">Total FUAs Observadas</p>
+                    <h2 style="color: {TEXT_MAIN}; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{total_observados:,}</h2>
                 </div>
                 <div>
                     <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
@@ -899,10 +913,10 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
 
     with col2:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+            <div style="background-color: {CARD_BG}; padding: 12px; border-radius: 8px; border: 1px solid {CARD_BORDER}; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
                 <div>
-                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Pendientes</p>
-                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{pendientes:,}</h2>
+                    <p style="color: {TEXT_SUB}; font-size: 12px; margin-bottom: 2px;">Pendientes</p>
+                    <h2 style="color: {TEXT_MAIN}; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{pendientes:,}</h2>
                 </div>
                 <div>
                     <span style="background-color: #332b00; color: #ffcc00; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
@@ -914,10 +928,10 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
 
     with col3:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+            <div style="background-color: {CARD_BG}; padding: 12px; border-radius: 8px; border: 1px solid {CARD_BORDER}; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
                 <div>
-                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Corregidas</p>
-                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{corregidos:,}</h2>
+                    <p style="color: {TEXT_SUB}; font-size: 12px; margin-bottom: 2px;">Corregidas</p>
+                    <h2 style="color: {TEXT_MAIN}; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{corregidos:,}</h2>
                 </div>
                 <div>
                     <span style="background-color: #113322; color: #00cc66; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
@@ -929,10 +943,10 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
 
     with col4:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+            <div style="background-color: {CARD_BG}; padding: 12px; border-radius: 8px; border: 1px solid {CARD_BORDER}; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
                 <div>
-                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Anuladas</p>
-                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{anuladas:,}</h2>
+                    <p style="color: {TEXT_SUB}; font-size: 12px; margin-bottom: 2px;">Anuladas</p>
+                    <h2 style="color: {TEXT_MAIN}; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{anuladas:,}</h2>
                 </div>
                 <div>
                     <span style="background-color: #331111; color: #ff4444; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
@@ -944,10 +958,10 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
 
     with col5:
         st.markdown(f"""
-            <div style="background-color: #0e1117; padding: 12px; border-radius: 8px; border: 1px solid #262730; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
+            <div style="background-color: {CARD_BG}; padding: 12px; border-radius: 8px; border: 1px solid {CARD_BORDER}; display: flex; flex-direction: column; justify-content: space-between; min-height: 115px;">
                 <div>
-                    <p style="color: #a3a8b8; font-size: 12px; margin-bottom: 2px;">Establecimientos</p>
-                    <h2 style="color: white; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{num_establecimientos} / 6</h2>
+                    <p style="color: {TEXT_SUB}; font-size: 12px; margin-bottom: 2px;">Establecimientos</p>
+                    <h2 style="color: {TEXT_MAIN}; margin-top: 0px; margin-bottom: 4px; font-size: 22px;">{num_establecimientos} / 6</h2>
                 </div>
                 <div>
                     <span style="background-color: #1a2332; color: #4fa3ff; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; display: inline-block;">
@@ -965,23 +979,47 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
     # Definimos la plantilla y colores según el tema seleccionado
     if "Claro" in tema_seleccionado:
         plotly_template = "plotly_white"
-        bg_grafico = "#ffffff"
-        color_texto = "#1a1d20"
-    else:
+        bg_grafico = "#FFFFFF"
+        color_texto = "#111827"
+
+    elif "MINSA" in tema_seleccionado:
+
         plotly_template = "plotly_dark"
-        bg_grafico = "rgba(0,0,0,0)"
-        color_texto = "#fafafa"
+
+        bg_grafico = estilos["chart_bg"]
+        color_texto = estilos["chart_text"]
+
+    else:
+
+        plotly_template = (
+        "plotly_white"
+        if "Claro" in tema_seleccionado
+        else "plotly_dark"
+    )
+
+    bg_grafico = estilos["chart_bg"]
+    color_texto = estilos["chart_text"]
 
     col_g1, col_g2 = st.columns(2)
 
+    # ===============================
+    # GRÁFICO DE BARRAS
+    # ===============================
+
     with col_g1:
+
         st.subheader("🏥 Observaciones por Establecimiento")
+
         df_estab_counts = (
             df_fuas["establecimiento"]
             .value_counts()
             .reset_index()
         )
-        df_estab_counts.columns = ["Establecimiento", "Total"]
+
+        df_estab_counts.columns = [
+            "Establecimiento",
+            "Total"
+        ]
 
         fig_bar = px.bar(
             df_estab_counts,
@@ -989,45 +1027,137 @@ def render_dashboard():  # Ya no necesita recibir 'conn' como parámetro, lo cre
             y="Total",
             color="Establecimiento",
             text="Total",
-            title="Cantidad de FUAs por IPRESS",
+            title="Cantidad de FUAs por IPRESS"
         )
-        fig_bar.update_traces(textposition="outside")
+
+        fig_bar.update_traces(
+            textposition="outside"
+        )
 
         fig_bar.update_layout(
             template=plotly_template,
+
             paper_bgcolor=bg_grafico,
             plot_bgcolor=bg_grafico,
-            font=dict(color=color_texto),
-            showlegend=False, 
-            xaxis_title="", 
-            yaxis_title="FUAs"
+
+            showlegend=False,
+
+            font=dict(
+                color=color_texto,
+                size=12
+            ),
+
+            title_font=dict(
+                color=color_texto,
+                size=20
+            ),
+
+            xaxis_title="",
+            yaxis_title="FUAs",
+
+            margin=dict(
+                l=20,
+                r=20,
+                t=60,
+                b=40
+            )
         )
-        fig_bar.update_layout(showlegend=False, xaxis_title="", yaxis_title="FUAs")
-        st.plotly_chart(fig_bar, use_container_width=True)
+
+        fig_bar.update_xaxes(
+            tickfont=dict(
+                color=color_texto,
+                size=11
+            )
+        )
+
+        fig_bar.update_yaxes(
+            tickfont=dict(
+                color=color_texto,
+                size=11
+            ),
+            title_font=dict(
+                color=color_texto,
+                size=14
+            ),
+            showgrid=True,
+            gridcolor="#D1D5DB" if "Claro" in tema_seleccionado else "#30363D"
+        )
+
+        st.plotly_chart(
+            fig_bar,
+            use_container_width=True
+        )
+
+    # ===============================
+    # GRÁFICO CIRCULAR
+    # ===============================
 
     with col_g2:
+
         st.subheader("📌 Estado de las Observaciones")
+
         df_estado_counts = (
-            df_fuas["estado"].value_counts().reset_index()
+            df_fuas["estado"]
+            .value_counts()
+            .reset_index()
         )
-        df_estado_counts.columns = ["Estado", "Cantidad"]
+
+        df_estado_counts.columns = [
+            "Estado",
+            "Cantidad"
+        ]
 
         fig_pie = px.pie(
             df_estado_counts,
             names="Estado",
             values="Cantidad",
-            hole=0.4,
+            hole=0.40,
             title="Proporción por Estado",
             color_discrete_sequence=px.colors.qualitative.Set2,
-        
         )
+
+        fig_pie.update_traces(
+            textfont=dict(
+                color=color_texto,
+                size=12
+            )
+        )
+
         fig_pie.update_layout(
             template=plotly_template,
+
             paper_bgcolor=bg_grafico,
             plot_bgcolor=bg_grafico,
-            font=dict(color=color_texto)
+
+            font=dict(
+                color=color_texto,
+                size=12
+            ),
+
+            title_font=dict(
+                color=color_texto,
+                size=20
+            ),
+
+            legend=dict(
+                font=dict(
+                    color=color_texto,
+                    size=12
+                )
+            ),
+
+            margin=dict(
+                l=20,
+                r=20,
+                t=60,
+                b=20
+            )
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
+
+        st.plotly_chart(
+            fig_pie,
+            use_container_width=True
+        )
 
 def buscar_fua_por_numero(numero_fua):
     conn = init_connection()
@@ -1509,42 +1639,193 @@ def generar_backup_bd():
     
 # ==========================================
 # 2. CONTROL DE SESIÓN Y NAVEGACIÓN
-# ==========================================
+# 2. CONTROL DE SESIÓN Y NAVEGACIÓN
+# =========================================================
 if "user" not in st.session_state:
     st.session_state["user"] = None
+
+if "mostrar_login" not in st.session_state:
+    st.session_state["mostrar_login"] = False
 
 if "menu_activo" not in st.session_state:
     st.session_state["menu_activo"] = "Dashboard"
 
-# ==========================================
-# 3. INTERFAZ GRÁFICA (UI)
-# ==========================================
+
+# =========================================================
+# 3. INTERFAZ GRÁFICA (UI) - BARRA SUPERIOR
+# =========================================================
+col_titulo, col_btn = st.columns([8, 2])
+
+if not st.session_state["mostrar_login"] and st.session_state["user"] is None:
+    col_titulo, col_btn = st.columns([8, 2])
+    with col_titulo:
+        st.title("📊 Panel Estadístico y Ranking de FUAs")
+        st.markdown("Visualización general y seguimiento de observaciones en los establecimientos de salud.")
+    with col_btn:
+        st.write("") 
+        if st.button("🔑 Iniciar Sesión", use_container_width=True, key="btn_abrir_login"):
+            st.session_state["mostrar_login"] = True
+            st.rerun()
+    st.markdown("---")
+
+
+# =========================================================
+# 4. GESTIÓN DE VISTAS (LOGIN, PÚBLICA, PRIVADA)
+# =========================================================
+
+# --- CASO 1: USUARIO NO AUTENTICADO ---
 if st.session_state["user"] is None:
-    # --- PANTALLA DE LOGIN ATRACTIVA ---
+    
+    # CSS PARA LA TARJETA CON DEGRADADO MAESTRO
+    st.markdown("""
+        <style>
+        h1 {
+            color: #0f172a !important;
+            font-weight: 700 !important;
+        }
+        .stApp {
+            background-color: #f1f5f9 !important;
+        }
 
-    # Creamos un diseño centrado usando columnas
-    _, col_centro, _ = st.columns([1, 1.2, 1])
+        /* Quitar bordes y fondos por defecto del formulario */
+        [data-testid="stForm"] {
+            background: transparent !important;
+            border: none !important;
+            padding: 0px 10px !important;
+            box-shadow: none !important;
+        }
 
-    with col_centro:
-        st.markdown("<br>", unsafe_allow_html=True)
+        /* Botón de ingreso estilizado */
+        .stButton > button,
+        .stFormSubmitButton > button {
+            background: linear-gradient(135deg, #1d367d, #1d4ed8) !important;
+            color: white !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            transition: .2s ease all !important;
+        }
 
-        # Encabezado institucional / visual
-        st.markdown(
-            """
-            <div style="text-align: center; padding: 10px;">
-                <span style="font-size: 45px;">🏥</span>
-                <h2 style="color: #0E4194; margin-bottom: 0px;">SISTEMA DE CONTROL DE FUAS OBSERVADAS</h2>
-                <p style="color: #555; font-size: 14px; margin-top: 5px;">Sistema de Monitoreo y Corrección de Registros</p>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+        .stButton > button:hover,
+        .stFormSubmitButton > button:hover {
+            background: linear-gradient(135deg, #1e3a8a, #2563eb) !important;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 10px rgba(37,99,235,.3);
+        }
 
-        # Tarjeta contenedora del Formulario
-        with st.container(border=True):
-            st.markdown("### 🔐 Acceso al Sistema")
+        .stButton > button p,
+        .stFormSubmitButton > button p {
+            color: white !important;
+        }
+        /* Fondo con degradado para todo el formulario */
+        div[data-testid="stForm"] {
+            background: linear-gradient(135deg, #1e3a8a, #2563eb) !important;
+            border: none !important;
+            border-radius: 0px !important;
+            padding: 15px 20px !important;
+            box-shadow: none !important;
+        }
 
-            with st.form("login_form"):
+        /* Etiquetas del formulario (Usuario y Contraseña) en blanco */
+        div[data-testid="stForm"] label p {
+            color: #ffffff !important;
+            font-weight: 600 !important;
+        }
+        
+        /* Cajas de texto blancas con letras oscuras */
+        div[data-baseweb="input"] > div {
+            background: #ffffff !important;
+            border: 1px solid #cbd5e1 !important;
+            border-radius: 8px !important;
+            box-shadow: none !important;
+        }
+
+        div[data-baseweb="input"] > div:hover {
+            border: 1px solid #94a3b8 !important;
+        }
+
+        div[data-baseweb="input"] > div:focus-within {
+            border: 1px solid #2563eb !important;
+            box-shadow: 0 0 0 3px rgba(37,99,235,.15) !important;
+        }
+
+        input {
+            color: #0f172a !important;
+            background: white !important;
+        }
+
+        input::placeholder {
+            color: #94a3b8 !important;
+        }
+
+        /* ==========================
+        CORRECCIÓN DE TEXTOS EN VISTA PÚBLICA
+        ========================== */
+        .stMarkdown h3, .stMarkdown p, .stAlert p {
+            color: #0f172a !important;
+        }
+        /* Forzar color oscuro y nítido para los números y etiquetas de st.metric */
+        [data-testid="stMetricValue"] {
+            color: #0f172a !important;
+            font-weight: 700 !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            color: #475569 !important;
+            font-weight: 600 !important;
+        }
+
+        [data-testid="stMetricDelta"] {
+            font-weight: 600 !important;
+        }
+
+        /* Asegurar que los subtítulos y textos informativos tengan color oscuro */
+        p, span, caption {
+            color: #334155 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Si HIZO CLIC en "Iniciar Sesión"
+    if st.session_state["mostrar_login"]:
+        _, col_centro, _ = st.columns([1, 1.4, 1])
+        with col_centro:
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Botón para volver al panel público
+            if st.button("← Volver al Panel Público", key="btn_volver_login"):
+                st.session_state["mostrar_login"] = False
+                st.rerun()
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+                    
+            # --- TARJETA CONTENEDORA MAESTRA CON DEGRADADO REAL ---
+            st.markdown("""
+                <div style="
+                    background: linear-gradient(135deg, #1e3a8a, #2563eb);
+                    border-radius: 14px 14px 0px 0px;
+                    box-shadow: 0 10px 25px rgba(37, 99, 235, 0.25);
+                    padding: 20px;
+                    border: 1px solid #2563eb;
+                ">
+                    <!-- 1. Encabezado institucional -->
+                    <div style="text-align: center; padding: 10px 0px 15px 0px;">
+                        <div style="font-size: 45px; margin-bottom: 2px;">🏥</div>
+                        <div style="color: #ffffff !important; font-size: 20px !important; font-weight: 700; letter-spacing: 0.5px; margin: 0px;">MR. CLAS COMBAPATA</div>
+                        <div style="width: 80px; height: 3px; background: #ffffff; margin: 12px auto; border-radius: 20px; opacity: 0.85;"></div>
+                        <div style="color: #ffffff !important; font-size: 15px !important; font-weight: 600; margin: 0px;">SISTEMA DE CONTROL DE FUAS OBSERVADAS</div>
+                        <div style="color: #dbeafe !important; font-size: 12px !important; margin-top: 6px; margin-bottom: 0px;">Monitoreo y Corrección de Registros</div>
+                    </div>
+                    <div style="color: #ffffff !important; font-size: 14px; font-weight: 600; padding: 10px 0px 5px 0px;">
+                        🔐 Acceso al Sistema
+                        </div>
+
+                        """, unsafe_allow_html=True)
+
+
+            # 3. Formulario nativo de Streamlit (se renderiza dentro del flujo visual)
+            with st.form("login_form_css_global"):
                 username_input = st.text_input("Usuario", placeholder="Ingrese su usuario")
                 password_input = st.text_input("Contraseña", type="password", placeholder="Ingrese su contraseña")
 
@@ -1559,48 +1840,405 @@ if st.session_state["user"] is None:
                         if user_data:
                             st.session_state["user"] = user_data
                             st.session_state["menu_activo"] = "Dashboard"
-                            st.success(f"¡Bienvenido/a, {user_data['nombre']}!")
+                            st.session_state["mostrar_login"] = False
+                            st.success(f"¡Bienvenido/a, {user_data.get('nombre', 'Usuario')}!")
                             st.rerun()
                         else:
                             st.error("❌ Usuario o contraseña incorrectos.")
 
-        st.markdown(
-            """
-            <div style="text-align: center; color: #888; font-size: 12px; margin-top: 20px;">
-                © 2026 • Módulo de Control FUAs MR. Combapata • Desarrollado por Joel Ch. F.
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+            # 4. Pie de página institucional y cierre de la tarjeta
+            st.markdown("""
+                <!-- Pie de página acoplado sin espacio en blanco -->
+                <div style="
+                    background: linear-gradient(135deg, #1e3a8a, #2563eb);
+                    text-align: center; 
+                    padding: 15px 10px; 
+                    border-radius: 0px 0px 14px 14px;
+                    border-top: 1px solid rgba(255, 255, 255, 0.15); 
+                    margin-top: -22px;
+                ">
+                    <div style="color: #ffffff !important; font-size: 12px; font-weight: 700;">MÓDULO DE CONTROL DE FUAS - MR COMBAPATA</div>
+                    <div style="color: #dbeafe !important; font-size: 11px; margin-top: 4px;">© 2026 • Todos los derechos reservados</div>
+                    <div style="color: #93c5fd !important; font-size: 11px; margin-top: 2px;">Desarrollado por Joel Ch. F.</div>
+                </div>
+            """, unsafe_allow_html=True)
+                                
+        st.stop()
 
+    # --- CASO 2: VISTA PÚBLICA ---
+    else:
+    # Encabezado superior y botón de login
+
+        # --- CARGAR DATOS BASE DESDE POSTGRESQL ---
+        @st.cache_data(ttl=30)
+        def cargar_datos_base():
+            conn = None
+            try:
+                conn = psycopg2.connect(
+                    user=str(st.secrets["postgres"]["user"]),
+                    password=str(st.secrets["postgres"]["password"]),
+                    host=str(st.secrets["postgres"].get("host", "localhost")),
+                    port=str(st.secrets["postgres"].get("port", "5432")),
+                    database=str(st.secrets["postgres"]["database"])
+                )
+                
+                df_est = pd.read_sql("SELECT id AS establecimiento_id, nombre_establecimiento FROM establecimientos;", conn)
+                # Aseguramos traer la fecha de registro y fecha de corrección si existen
+                df_fuas = pd.read_sql("""
+                    SELECT id, establecimiento_id, estado, tipo_observacion, fecha_registro, fecha_correccion 
+                    FROM fuas_observadas;
+                """, conn)
+                
+                return df_est, df_fuas
+            except Exception as e:
+                # Fallback por si las columnas de fecha aún no están creadas en la BD
+                try:
+                    df_fuas = pd.read_sql("SELECT id, establecimiento_id, estado, tipo_observacion FROM fuas_observadas;", conn)
+                    df_fuas["fecha_registro"] = pd.NaT
+                    df_fuas["fecha_correccion"] = pd.NaT
+                    return df_est, df_fuas
+                except Exception as inner_e:
+                    st.error(f"Error al conectar con la base de datos: {inner_e}")
+                    return pd.DataFrame(), pd.DataFrame()
+            finally:
+                if conn is not None:
+                    conn.close()
+
+        df_est, df_fuas = cargar_datos_base()
+
+        # Procesar fechas y uniones
+        if not df_fuas.empty and not df_est.empty:
+            df_merged = pd.merge(df_fuas, df_est, on="establecimiento_id", how="left")
+            df_merged["Estado_Clean"] = df_merged["estado"].fillna("Pendiente").astype(str)
+            
+            # Convertir a datetime para filtros temporales
+            df_merged["fecha_registro"] = pd.to_datetime(df_merged["fecha_registro"], errors="coerce")
+            df_merged["fecha_correccion"] = pd.to_datetime(df_merged["fecha_correccion"], errors="coerce")
+            
+            df_merged["Anio"] = df_merged["fecha_registro"].dt.year
+            df_merged["Mes"] = df_merged["fecha_registro"].dt.month_name()
+        else:
+            df_merged = pd.DataFrame(columns=["id", "establecimiento_id", "estado", "tipo_observacion", "nombre_establecimiento", "Estado_Clean", "fecha_registro", "fecha_correccion", "Anio", "Mes"])
+
+        # --- PANEL DE FILTROS SUPERIORES (Establecimiento, Año y Mes) ---
+        col_f1, col_f2, col_f3 = st.columns([3, 2, 2])
+        
+        lista_ee = ["Todos los Establecimientos"]
+        if not df_est.empty and "nombre_establecimiento" in df_est.columns:
+            lista_ee += sorted(df_est["nombre_establecimiento"].dropna().unique().tolist())
+
+        anios_disponibles = ["Todos los Años"]
+        if not df_merged.empty and "Anio" in df_merged.columns:
+            anios_validos = df_merged["Anio"].dropna().unique()
+            anios_disponibles += sorted([int(a) for a in anios_validos], reverse=True)
+
+        meses_disponibles = ["Todos los Meses", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+        with col_f1:
+            ee_seleccionado = st.selectbox("🏥 Establecimiento:", lista_ee, key="filtro_ee")
+        with col_f2:
+            anio_seleccionado = st.selectbox("📅 Año:", anios_disponibles, key="filtro_anio")
+        with col_f3:
+            mes_seleccionado = st.selectbox("🗓️ Mes:", meses_disponibles, key="filtro_mes")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Diccionario de traducción de nombres de meses al número de mes (1-12)
+        meses_map = {
+            "Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4,
+            "Mayo": 5, "Junio": 6, "Julio": 7, "Agosto": 8,
+            "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12
+        }
+
+        # Extraer el número de mes numérico para filtrar con precisión
+        if not df_merged.empty and "fecha_registro" in df_merged.columns:
+            df_merged["Mes_Num"] = df_merged["fecha_registro"].dt.month
+        else:
+            df_merged["Mes_Num"] = None
+
+        # --- APLICAR FILTROS EN MEMORIA ---
+        df_filtered = df_merged.copy()
+
+        if ee_seleccionado != "Todos los Establecimientos":
+            df_filtered = df_filtered[df_filtered["nombre_establecimiento"] == ee_seleccionado]
+        if anio_seleccionado != "Todos los Años":
+            df_filtered = df_filtered[df_filtered["Anio"] == anio_seleccionado]
+        if mes_seleccionado != "Todos los Meses":
+            mes_num_sel = meses_map.get(mes_seleccionado)
+            df_filtered = df_filtered[df_filtered["Mes_Num"] == mes_num_sel]
+
+        # Calcular Métricas (KPIs)
+        total_fuas = len(df_filtered)
+        total_corregidas = len(df_filtered[df_filtered["Estado_Clean"].str.lower().str.contains("correg", na=False)]) if not df_filtered.empty else 0
+        total_anuladas = len(df_filtered[df_filtered["Estado_Clean"].str.lower().str.contains("anul", na=False)]) if not df_filtered.empty else 0
+        total_pendientes = len(df_filtered[df_filtered["Estado_Clean"].str.lower().str.contains("pend", na=False) | df_filtered["estado"].isna()]) if not df_filtered.empty else 0
+        
+        tasa_subsanacion = (total_corregidas / total_fuas * 100) if total_fuas > 0 else 0.0
+
+        # Calcular Indicador de Eficiencia de Respuesta (Días promedio de subsanación)
+        if not df_filtered.empty and "fecha_correccion" in df_filtered.columns and "fecha_registro" in df_filtered.columns:
+            df_subs = df_filtered[df_filtered["fecha_correccion"].notna() & df_filtered["fecha_registro"].notna()]
+            if not df_subs.empty:
+                dias_diff = (df_subs["fecha_correccion"] - df_subs["fecha_registro"]).dt.days
+                tiempo_promedio = round(dias_diff.mean(), 1)
+            else:
+                tiempo_promedio = 0.0
+        else:
+            tiempo_promedio = 0.0
+
+        # --- 6 TARJETAS DE MÉTRICAS PRINCIPALES ---
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        
+        with col1:
+            st.metric(label="📄 Registradas", value=f"{total_fuas:,}", delta="Base activa")
+        with col2:
+            st.metric(label="⚠️ Pendientes", value=f"{total_pendientes:,}", delta="Por revisar", delta_color="inverse")
+        with col3:
+            st.metric(label="✅ Corregidas", value=f"{total_corregidas:,}", delta="Subsanadas")
+        with col4:
+            st.metric(label="❌ Anuladas", value=f"{total_anuladas:,}", delta="Bajas", delta_color="off")
+        with col5:
+            st.metric(label="⏱️ T. Promedio", value=f"{tiempo_promedio} días", delta="Eficiencia")
+        with col6:
+            st.metric(label="📈 Subsanación", value=f"{tasa_subsanacion:.1f}%", delta="Eficacia")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+
+        if not df_filtered.empty:
+            df_ee_ss = df_filtered.groupby(["nombre_establecimiento", "Estado_Clean"]).size().reset_index(name="Cantidad")
+            df_ee_ss.rename(columns={"nombre_establecimiento": "Establecimiento", "Estado_Clean": "Estado"}, inplace=True)
+        else:
+            df_ee_ss = pd.DataFrame(columns=["Establecimiento", "Estado", "Cantidad"])
+
+        # --- SECCIÓN DE GRÁFICOS Y TENDENCIAS ---
+        col_izq, col_der = st.columns(2)
+
+        with col_izq:
+            st.markdown("#### 📈 FUAs por Establecimiento y Estado")
+            if df_ee_ss is not None and not df_ee_ss.empty and df_ee_ss["Cantidad"].sum() > 0:
+                import altair as alt
+                
+                domain = ['Pendiente', 'Corregido', 'Anulado']
+                range_colors = ['#facc15', '#22c55e', '#ef4444']  # Amarillo, Verde, Rojo
+                
+                chart_bar = (
+                    alt.Chart(df_ee_ss)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X(
+                            'Establecimiento:N',
+                            title='Establecimiento',
+                            axis=alt.Axis(
+                                labelColor='#111827',
+                                titleColor='#111827',
+                                labelFontSize=12,
+                                titleFontSize=14
+                            )
+                        ),
+                        y=alt.Y(
+                            'Cantidad:Q',
+                            title='Cantidad',
+                            axis=alt.Axis(
+                                labelColor='#111827',
+                                titleColor='#111827',
+                                labelFontSize=12,
+                                titleFontSize=14
+                            )
+                        ),
+                        color=alt.Color(
+                            'Estado:N',
+                            scale=alt.Scale(
+                                domain=domain,
+                                range=range_colors
+                            ),
+                            title='Estado',
+                            legend=alt.Legend(
+                                labelColor='#111827',
+                                titleColor='#111827',
+                                labelFontSize=12,
+                                titleFontSize=14
+                            )
+                        ),
+                        tooltip=['Establecimiento', 'Estado', 'Cantidad']
+                    )
+                    .properties(
+                        height=350
+                    )
+                    .configure(
+                        background='#ffffff'
+                    )
+                    .configure_axis(
+                        grid=True,
+                        gridColor='#d1d5db',
+                        domainColor='#374151',
+                        tickColor='#374151',
+                        labelColor='#111827',
+                        titleColor='#111827'
+                    )
+                    .configure_view(
+                        stroke=None
+                    )
+                    .interactive()
+                )
+                
+                st.altair_chart(chart_bar, use_container_width=True)
+            else:
+                st.info("ℹ️ No hay registros suficientes para mostrar el gráfico en este establecimiento.")
+
+        with col_der:
+            st.markdown("#### 📉 Tendencia Temporal de Observaciones")
+            if not df_filtered.empty and "fecha_registro" in df_filtered.columns:
+                import altair as alt
+                
+                df_tendencia = df_filtered.dropna(subset=["fecha_registro"]).copy()
+                if not df_tendencia.empty:
+                    df_tendencia["Periodo"] = df_tendencia["fecha_registro"].dt.to_period("M").astype(str)
+                    df_tendencia_grp = df_tendencia.groupby("Periodo").size().reset_index(name="Cantidad")
+                    
+                    chart_line = (
+                        alt.Chart(df_tendencia_grp)
+                        .mark_line(
+                            point=True,
+                            color="#2563eb",
+                            strokeWidth=3
+                        )
+                        .encode(
+                            x=alt.X(
+                                'Periodo:N',
+                                title='Periodo (Mes/Año)',
+                                axis=alt.Axis(
+                                    labelColor='#111827',
+                                    titleColor='#111827',
+                                    labelFontSize=12,
+                                    titleFontSize=14
+                                )
+                            ),
+                            y=alt.Y(
+                                'Cantidad:Q',
+                                title='Nº Observaciones',
+                                axis=alt.Axis(
+                                    labelColor='#111827',
+                                    titleColor='#111827',
+                                    labelFontSize=12,
+                                    titleFontSize=14
+                                )
+                            ),
+                            tooltip=['Periodo', 'Cantidad']
+                        )
+                        .properties(
+                            height=350
+                        )
+                        .configure(
+                            background="#FFFFFF"
+                        )
+                        .configure_axis(
+                            grid=True,
+                            gridColor="#D1D5DB",
+                            domainColor="#374151",
+                            tickColor="#374151",
+                            labelColor="#111827",
+                            titleColor="#111827"
+                        )
+                        .configure_view(
+                            stroke=None
+                        )
+                        .interactive()
+                    )
+                    
+                    st.altair_chart(chart_line, use_container_width=True)
+                else:
+                    st.info("ℹ️ No hay fechas registradas para generar la tendencia.")
+            else:
+                st.info("ℹ️ Datos de tendencia no disponibles.")
+            
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+        # --- TABLA DE MOTIVOS ---
+        st.markdown("#### 📋 Principales Motivos de Observación")
+
+        if not df_filtered.empty:
+            df_motivos = df_filtered.groupby("tipo_observacion").size().reset_index(name="Cantidad")
+            df_motivos.rename(columns={"tipo_observacion": "Motivo de Observación"}, inplace=True)
+            df_motivos = df_motivos.sort_values(by="Cantidad", ascending=False)
+
+            def zebra_rows(row):
+                color = "#FFFFFF" if row.name % 2 == 0 else "#F3F4F6"
+                return [f"background-color: {color}" for _ in row]
+
+            styled_df = (
+                df_motivos.style
+                .apply(zebra_rows, axis=1)
+                .set_properties(**{
+                    "color": "#000000",
+                    "border-bottom": "1px solid #E5E7EB"
+                })
+                .set_properties(
+                    subset=["Cantidad"],
+                    **{
+                        "text-align": "center",
+                        "font-weight": "bold"
+                    }
+                )
+                .set_table_styles([
+                    {
+                        "selector": "th",
+                        "props": [
+                            ("background-color", "#0F172A"),
+                            ("color", "white"),
+                            ("font-size", "14px"),
+                            ("font-weight", "bold"),
+                            ("text-align", "center")
+                        ]
+                    }
+                ])
+                .highlight_max(
+                    subset=["Cantidad"],
+                    color="#D1FAE5"
+                )
+            )
+
+            st.dataframe(
+                styled_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+
+        else:
+            st.info("ℹ️ No hay motivos registrados con los filtros seleccionados.")
+    
+    
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Pie de página público
+        st.markdown("""
+            <div style="text-align: center; padding: 15px; color: #64748b; font-size: 12px; border-top: 1px solid #cbd5e1; margin-top: 30px;">
+                <b>MR. CLAS COMBAPATA</b><br>
+                Módulo de Control y Monitoreo de Registros FUA Observada • Elaborado por Joel CH. F.
+            </div>
+        """, unsafe_allow_html=True)
+    
+
+# --- CASO 3: USUARIO LOGUEADO (VISTA PRIVADA / ADMINISTRATIVA) ---
 else:
-    # --- PANEL PRINCIPAL TRAS LOGUEARSE ---
     user = st.session_state["user"]
     
-    # Extraemos el nombre de la sesión (probando las llaves más comunes)
+    # Extraemos los datos del usuario de forma segura con respaldos
     nombre_usuario = (
         user.get("nombre") or 
         user.get("nombres") or 
         user.get("nombre_completo") or 
         user.get("username") or 
-        "JOEL CHURAPA FLORES"
+        "Usuario Activo"
     )
     
     es_admin_user = user.get("es_admin", False)
     user_rol = user.get("rol", "Administrador" if es_admin_user else "Digitador")
 
-    # 👤 Mostrar el usuario activo y su rol dentro de un recuadro
-    user_info = st.session_state.get("user", {})
-    nombre_usuario = (
-        user_info.get("nombre_completo") or 
-        st.session_state.get("nombre_completo") or 
-        user_info.get("nombre") or 
-        "Digitador Activo"
-    )
-    
-    es_admin_user = user_info.get("es_admin", False)
-    user_rol = user_info.get("rol", "Administrador" if es_admin_user else "Digitador")
-
+    # 👤 Mostrar el usuario activo y su rol en un recuadro en la barra lateral
     st.sidebar.markdown(f"""
         <div style="
             padding: 12px; 
@@ -1627,181 +2265,174 @@ else:
     """, unsafe_allow_html=True)
     st.sidebar.markdown("---")
 
-    # --- SECCIÓN DE APARIENCIA / SELECTOR DE TEMAS ---
+    # =====================================================
+    # APARIENCIA / SISTEMA DE TEMAS
+    # =====================================================
     st.sidebar.markdown("""
-        <div style="
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 1.2px;
-            color: #888;
-            margin-top: 10px;
-            margin-bottom: 8px;
-            text-transform: uppercase;
-        ">
-            Apariencia
-        </div>
+    <div style="
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+        color: #888;
+        margin-top: 10px;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+    ">
+        Apariencia
+    </div>
     """, unsafe_allow_html=True)
 
-    # Definimos los temas con sus colores dinámicos completos (incluyendo fondos generales y gráficos)
-    temas_disponibles = {
-        "🌙 Modo Oscuro": {
-            "bg_app": "#0e1117",            # Fondo general oscuro profundo
-            "bg_sidebar": "#161b22",        # Elevación limpia para la barra lateral
-            "text_main": "#e6edf3",         # Texto claro de alta legibilidad
-            "text_sub": "#8b949e",          # Texto secundario/labels suaves
-            "bg_card": "rgba(22, 27, 34, 0.7)", # Tarjetas sobrias con transparencia elegante
-            "border_card": "#30363d",       # Bordes finos estilo GitHub Dark
-            "accent": "#2f81f7",            # Azul de acento institucional/tecnológico
-            "hover_bg": "rgba(56, 139, 253, 0.15)",
-            "hover_border": "#58a6ff",
-            "input_bg": "#0d1117"
-        },
-        "🏥 Tema MINSA (Institucional)": {
-            "bg_app": "#071b26",          # Azul marino institucional profundo
-            "text_main": "#e0f2f1",        # Texto claro con un toque sutil verde agua
-            "bg_card": "rgba(0, 150, 136, 0.12)",      # Tarjetas con sutil traslucidez verde médica/turquesa
-            "border_card": "rgba(0, 150, 136, 0.35)",  # Bordes definidos en tono turquesa MINSA
-            "hover_border": "#00bcd4",     # Borde celeste brillante al pasar el cursor
-            "hover_bg": "rgba(0, 150, 136, 0.22)"
-        },
-        "☀️ Modo Claro": {
-            "bg_app": "#e2d8d8",
-            "text_main": "#1a1d20",
-            "bg_card": "#f8f9fa",
-            "border_card": "#B9D8F8",
-            "hover_border": "#1976D2",
-            "hover_bg": "rgba(25, 118, 210, 0.08)",
-            "input_bg": "#cec7c7",          # Fondo blanco para los inputs
-            "input_text": "#000000"         # Texto oscuro legible en los inputs
-        }
-    }
+    
 
-    # Selector desplegable en el sidebar
-    tema_seleccionado = st.sidebar.selectbox("Seleccionar Tema Visual", list(temas_disponibles.keys()), label_visibility="collapsed")
-    estilos = temas_disponibles[tema_seleccionado]
+    tema_seleccionado = st.sidebar.selectbox(
+        "Seleccionar Tema Visual",
+        list(TEMAS_DISPONIBLES.keys()),
+        label_visibility="collapsed"
+    )
 
-    # --- TARJETA DE USUARIO DINÁMICA ---
-    st.markdown(f"""
-        <style>
-        /* 1. Variables raíz del sistema */
-        :root {{
-            --background-color: {estilos["bg_app"]};
-            --secondary-background-color: {estilos.get("bg_sidebar", estilos["bg_card"])};
-            --text-color: {estilos["text_main"]};
-            --accent-color: {estilos.get("accent", "#2f81f7")};
-        }}
+    estilos = TEMAS_DISPONIBLES[tema_seleccionado]
+    apply_theme_css(estilos)
 
-        /* 2. Fondo principal y tipografía general */
-        .stApp, body {{
-            background-color: {estilos["bg_app"]} !important;
-            color: {estilos["text_main"]} !important;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-        }}
+    # Variables reutilizables para Altair
+    CHART_BG = estilos["chart_bg"]
+    CHART_TEXT = estilos["chart_text"]
+    CHART_GRID = estilos["chart_grid"]
+    CHART_BORDER = estilos["chart_border"]
 
-        /* 3. Títulos y etiquetas de formulario */
-        h1, h2, h3, h4, h5, h6 {{
-            color: {estilos["text_main"]} !important;
-            font-weight: 600 !important;
-            letter-spacing: -0.3px !important;
-        }}
-        
-        label, [data-testid="stMetricLabel"] {{
-            color: {estilos.get("text_sub", "#8b949e")} !important;
-            font-size: 0.85rem !important;
-            font-weight: 500 !important;
-        }}
+    # =====================================================
+    # CSS DINÁMICO
+    # =====================================================
 
-        /* 4. Entradas de datos (Inputs, Selectbox, Calendar) */
-        input, textarea, 
-        div[data-baseweb="select"] > div, 
-        div[data-baseweb="base-input"],
-        div[data-baseweb="input"],
-        div[data-baseweb="calendar"] {{
-            background-color: {estilos.get("input_bg", "#0d1117")} !important;
-            color: {estilos["text_main"]} !important;
-            border: 1px solid {estilos["border_card"]} !important;
-            border-radius: 6px !important;
-            transition: all 0.2s ease-in-out !important;
-        }}
+    # # st.markdown(f"""
+    # <style>
 
-        /* Efecto de foco en inputs */
-        div[data-baseweb="input"]:focus-within, 
-        div[data-baseweb="select"]:focus-within > div {{
-            border-color: {estilos.get("accent", "#2f81f7")} !important;
-            box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.2) !important;
-        }}
+    # /* Fondo general */
+    # [data-testid="stAppViewContainer"] {{
+    #     background-color: {estilos["bg_app"]} !important;
+    # }}
 
-        /* 5. Tablas y DataFrames estilizados para Modo Oscuro */
-        [data-testid="stDataFrame"], [data-testid="stTable"], .stDataFrame {{
-            background-color: {estilos.get("input_bg", "#0d1117")} !important;
-            border-radius: 8px !important;
-            border: 1px solid {estilos["border_card"]} !important;
-            padding: 4px !important;
-        }}
+    # .main {{
+    #     background-color: {estilos["bg_app"]} !important;
+    # }}
 
-        /* 6. Sidebar (Barra Lateral) */
-        [data-testid="stSidebar"] {{
-            background-color: {estilos.get("bg_sidebar", estilos["bg_card"])} !important;
-            border-right: 1px solid {estilos["border_card"]} !important;
-        }}
-        
-        /* Botones de navegación en el Sidebar */
-        [data-testid="stSidebar"] .stButton > button {{
-            background-color: {estilos["bg_card"]} !important;
-            color: {estilos["text_main"]} !important;
-            border: 1px solid {estilos["border_card"]} !important;
-            justify-content: flex-start !important;
-            text-align: left !important;
-            width: 100% !important;
-            border-radius: 8px !important;
-            padding: 10px 14px !important;
-            font-weight: 500 !important;
-            display: flex !important;
-            align-items: center !important;
-            transition: all 0.2s ease !important;
-        }}
-        
-        /* Asegurar la alineación interna de los textos y contenedores del botón */
-        [data-testid="stSidebar"] .stButton > button div,
-        [data-testid="stSidebar"] .stButton > button p {{
-            text-align: left !important;
-            justify-content: flex-start !important;
-            width: 100% !important;
-            color: {estilos["text_main"]} !important;
-        }}
+    # body {{
+    #     color: {estilos["text_main"]} !important;
+    # }}
 
-        /* Efecto al pasar el cursor (Hover) */
-        [data-testid="stSidebar"] .stButton > button:hover {{
-            background-color: {estilos.get("hover_bg", "rgba(255,255,255,0.08)")} !important;
-            border-color: {estilos.get("hover_border", "#58a6ff")} !important;
-            color: {estilos.get("hover_border", "#58a6ff")} !important;
-        }}
+    # /* Sidebar */
+    # [data-testid="stSidebar"] {{
+    #     background-color: {estilos["bg_sidebar"]} !important;
+    #     border-right: 1px solid {estilos["border_card"]} !important;
+    # }}
 
-        /* 7. Botones principales de acción */
-        .stButton > button {{
-            border-radius: 6px !important;
-            border: 1px solid {estilos["border_card"]} !important;
-            background-color: {estilos.get("accent", "#2f81f7")} !important;
-            color: #ffffff !important;
-            font-weight: 600 !important;
-            padding: 6px 16px !important;
-            transition: all 0.2s ease !important;
-        }}
-        
-        .stButton > button:hover {{
-            opacity: 0.9 !important;
-            transform: translateY(-1px);
-        }}
+    # /* Títulos */
+    # h1,h2,h3,h4,h5,h6 {{
+    #     color: {estilos["text_main"]} !important;
+    #     font-weight: 600 !important;
+    # }}
 
-        /* 8. Ocultar marcas de agua y headers innecesarios */
-        #MainMenu {{visibility: hidden;}}
-        footer {{visibility: hidden;}}
-        [data-testid="stToolbar"] button[kind="header"],
-        button[title*="Deploy"], [data-testid="baseButton-header"] {{
-            display: none !important;
-        }}
-        </style>
-    """, unsafe_allow_html=True)
+    # /* Labels */
+    # label,
+    # [data-testid="stMetricLabel"] {{
+    #     color: {estilos["text_sub"]} !important;
+    # }}
+
+    # /* Inputs */
+    # input,
+    # textarea,
+    # div[data-baseweb="select"] > div,
+    # div[data-baseweb="base-input"],
+    # div[data-baseweb="input"],
+    # div[data-baseweb="calendar"] {{
+
+    #     background-color: {estilos["input_bg"]} !important;
+    #     color: {estilos["input_text"]} !important;
+
+    #     border: 1px solid {estilos["border_card"]} !important;
+    #     border-radius: 6px !important;
+    # }}
+
+    # /* Selectbox */
+    # div[data-baseweb="select"] * {{
+    #     color: {estilos["input_text"]} !important;
+    # }}
+
+    # /* Date Input */
+    # [data-testid="stDateInput"] input {{
+    #     color: {estilos["input_text"]} !important;
+    # }}
+
+    # /* Focus */
+    # div[data-baseweb="input"]:focus-within,
+    # div[data-baseweb="select"]:focus-within > div {{
+
+    #     border-color: {estilos["accent"]} !important;
+    #     box-shadow: 0 0 0 3px rgba(47,129,247,0.2) !important;
+    # }}
+
+    # /* DataFrame */
+    # [data-testid="stDataFrame"],
+    # [data-testid="stTable"],
+    # .stDataFrame {{
+
+    #     background-color: {estilos["bg_card"]} !important;
+
+    #     border: 1px solid {estilos["border_card"]} !important;
+    #     border-radius: 10px !important;
+
+    #     color: {estilos["text_main"]} !important;
+    # }}
+
+    # /* Botones generales */
+    # .stButton > button {{
+
+    #     background-color: {estilos["accent"]} !important;
+    #     color: white !important;
+
+    #     border: 1px solid {estilos["border_card"]} !important;
+    #     border-radius: 8px !important;
+
+    #     font-weight: 600 !important;
+    # }}
+
+    # .stButton > button:hover {{
+    #     opacity: .92 !important;
+    # }}
+
+    # /* Sidebar botones */
+    # [data-testid="stSidebar"] .stButton > button {{
+
+    #     background-color: {estilos["bg_card"]} !important;
+    #     color: {estilos["text_main"]} !important;
+
+    #     text-align: left !important;
+
+    #     border: 1px solid {estilos["border_card"]} !important;
+    # }}
+
+    # [data-testid="stSidebar"] .stButton > button:hover {{
+
+    #     background-color: {estilos["hover_bg"]} !important;
+    #     border-color: {estilos["hover_border"]} !important;
+    # }}
+
+    # /* Ocultar componentes */
+    # #MainMenu {{
+    #     visibility: hidden;
+    # }}
+
+    # footer {{
+    #     visibility: hidden;
+    # }}
+
+    # button[title*="Deploy"] {{
+    #     display: none !important;
+    # }}
+
+    # </style>
+    # """, unsafe_allow_html=True)
+
+
 
 
 
@@ -1876,7 +2507,7 @@ else:
 
 
     if vista_actual == "Dashboard":
-        render_dashboard()
+        render_dashboard(estilos)
 
 
     if vista_actual == "Registrar Usuario" and es_admin_user:
@@ -2875,6 +3506,65 @@ else:
                 st.error(f"Error al consultar la base de datos: {e}")
 
     elif vista_actual == "Reportes y Estadísticas":
+        from theme import get_theme
+        theme = get_theme(estilos)
+
+        CARD_BG = theme["CARD_BG"]
+        CARD_BORDER = theme["CARD_BORDER"]
+        
+        TEXT_MAIN = theme["TEXT_MAIN"]
+        TEXT_SUB = theme["TEXT_SUB"]
+        
+        CHART_BG = theme["CHART_BG"]
+        CHART_TEXT = theme["CHART_TEXT"]
+        
+        ACCENT = theme["ACCENT"]
+
+        
+        st.markdown(f"""
+            <style>
+
+            /* MÉTRICAS */
+
+            [data-testid="stMetric"] {{
+                background-color: {CARD_BG};
+                border: 1px solid {CARD_BORDER};
+                border-radius: 10px;
+                padding: 12px;
+            }}
+
+            [data-testid="stMetricLabel"] {{
+                color: {TEXT_SUB} !important;
+            }}
+
+            [data-testid="stMetricValue"] {{
+                color: {TEXT_MAIN} !important;
+            }}
+
+            /* TABS */
+
+            button[data-baseweb="tab"] {{
+                color: {TEXT_MAIN} !important;
+            }}
+
+            /* DATAFRAME */
+
+            [data-testid="stDataFrame"] {{
+                background-color: {CARD_BG} !important;
+            }}
+
+            /* DOWNLOAD BUTTON */
+
+            .stDownloadButton > button {{
+                background-color: {ACCENT} !important;
+                color: white !important;
+                border-radius: 8px !important;
+                border: none !important;
+            }}
+
+            </style>
+            """, unsafe_allow_html=True)
+
         st.subheader("📊 Módulo de Reportes y Estadísticas")
         st.markdown("---")
         
@@ -2935,7 +3625,25 @@ else:
                 
                 st.markdown("### 📈 Gráfico Comparativo por Establecimiento")
                 df_chart_est = df_reporte_est.set_index("Establecimiento")[["Pendientes", "Corregidos"]]
-                st.bar_chart(df_chart_est)
+                import plotly.express as px
+                fig = px.bar(
+                    df_reporte_est,
+                    x="Establecimiento",
+                    y=["Pendientes", "Corregidos"],
+                    barmode="group"
+                )
+
+                fig.update_layout(
+                    paper_bgcolor=CHART_BG,
+                    plot_bgcolor=CHART_BG,
+                    font=dict(color=CHART_TEXT),
+                    template="plotly_white" if "Claro" in tema_seleccionado else "plotly_dark"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
             else:
                 st.info("No hay suficientes datos registrados por establecimiento.")
                 
